@@ -1,0 +1,7 @@
+[submodule "semirings/insight_calc"]
+	path = semirings/insight_calc
+	url = git@gh-semirings:semirings/insight_calc.git
+[submodule "semirings/insight_store"]
+	path = semirings/insight_store
+	url = git@gh-semirings:semirings/insight_store.git
+
