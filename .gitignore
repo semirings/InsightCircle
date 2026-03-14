@@ -1,0 +1,24 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Flutter / Dart
+build/
+.flutter-plugins
+.dart_tool/
+
+# Java
+*.class
+*.jar
+target/
+
+# IDE / OS
+*.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Misc
+.env

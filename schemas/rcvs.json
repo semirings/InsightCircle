@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AssociativeArrayTable",
+  "type": "object",
+  "required": ["rows", "cols", "vals"],
+  "properties": {
+    "rows": {
+      "type": "array",
+      "description": "Row identifiers",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "cols": {
+      "type": "array",
+      "description": "Column identifiers",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "vals": {
+      "type": "array",
+      "description": "Values corresponding to row/column pairs",
+      "items": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    }
+  },
+  "additionalProperties": false
+}

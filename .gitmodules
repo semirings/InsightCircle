@@ -5,3 +5,6 @@
 	path = semirings/insight_store
 	url = git@gh-semirings:semirings/insight_store.git
 
+[submodule "semirings/insight_visual"]
+	path = semirings/insight_visual
+	url = git@gh-semirings:semirings/insight_visual.git
