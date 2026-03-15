@@ -1,0 +1,14 @@
+services:
+  insight_store:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: insight_store:latest
+    container_name: insight_store
+    ports:
+      - "5202:5202"
+    environment:
+      - SPRING_REDIS_HOST=host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
