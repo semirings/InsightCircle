@@ -1,4 +1,11 @@
 services:
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
   insight_store:
     build:
       context: .
@@ -8,7 +15,7 @@ services:
     ports:
       - "5202:5202"
     environment:
-      - SPRING_REDIS_HOST=host.docker.internal
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+    depends_on:
+      - redis
