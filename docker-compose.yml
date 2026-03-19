@@ -1,13 +1,13 @@
 services:
-  insight_visual:
-    build:
-      context: insight_visual
-      dockerfile: Dockerfile
-    image: insight_visual:latest
-    container_name: insight_visual
-    ports:
-      - "5200:5200"
-    restart: unless-stopped
+  # insight_visual:
+  #   build:
+  #     context: insight_visual
+  #     dockerfile: Dockerfile
+  #   image: insight_visual:latest
+  #   container_name: insight_visual
+  #   ports:
+  #     - "5200:5200"
+  #   restart: unless-stopped
 
   insight_calc:
     build:
@@ -18,7 +18,7 @@ services:
     ports:
       - "5201:5201"
     environment:
-      - HAZOO_BASE_URL=http://host.docker.internal:5102
+      - HAZOO_BASE_URL=http://host.docker.internal:5202
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -38,9 +38,13 @@ services:
     container_name: insight_store
     ports:
       - "5202:5202"
+    env_file:
+      - .env
     environment:
     - SPRING_REDIS_HOST=redis
     - SPRING_REDIS_PORT=6379
+    - ACCUMULO_HOST=host.docker.internal:2181          # points to host IP
+    - ACCUMULO_TABLET_PORT=9997 
     depends_on:
       - redis
     restart: unless-stopped

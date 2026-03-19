@@ -5,6 +5,7 @@ WORKDIR /app
 COPY d4m.acc.microservice/build/libs/d4m.acc.microservice-0.0.1.jar /app/app.jar
 COPY wait-for-it.sh /app/wait-for-it.sh
 
+RUN apt-get update && apt-get install -y netcat-openbsd && rm -rf /var/lib/apt/lists/*
 RUN sed -i 's/\r$//' /app/wait-for-it.sh
 RUN chmod +x /app/wait-for-it.sh
 

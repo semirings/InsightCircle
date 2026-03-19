@@ -15,6 +15,7 @@ services:
     container_name: insight_store
     ports:
       - "5202:5202"
+      - "9997:9997" 
     environment:
       - SPRING_REDIS_HOST=redis
       - SPRING_REDIS_PORT=6379
