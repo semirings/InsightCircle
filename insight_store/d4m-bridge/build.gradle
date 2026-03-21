@@ -1,0 +1,36 @@
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+  // Spring annotations needed only to compile the stereotypes
+  compileOnly libs.context          // org.springframework:spring-context
+  testImplementation libs.context   // if tests compile/use Spring types
+
+  // Your existing deps (trimmed to essentials)
+  implementation libs.emfCommon
+  implementation libs.emfEcore
+  implementation libs.xtext
+  implementation libs.queryDSL
+  implementation libs.jacksonCore
+  implementation libs.jacksonDatabind
+  implementation libs.jacksonAnnotations
+  api libs.accumulo 
+  
+  implementation libs.springStarterDataRedis
+  implementation libs.springSessionDataRedis
+
+  testImplementation libs.junitJupiter
+  testImplementation libs.junitJupiterAPI
+}
+
+
+
+
+tasks.processResources {
+  exclude("logback.xml", "logback-spring.xml")
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
