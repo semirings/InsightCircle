@@ -9,19 +9,19 @@ services:
   #     - "5200:5200"
   #   restart: unless-stopped
 
-  insight_calc:
-    build:
-      context: insight_calc
-      dockerfile: Dockerfile
-    image: insight_calc:latest
-    container_name: insight_calc
-    ports:
-      - "5201:5201"
-    environment:
-      - HAZOO_BASE_URL=http://host.docker.internal:5202
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+  # insight_calc:
+  # build:
+  #   context: insight_calc
+  #   dockerfile: Dockerfile
+  # image: insight_calc:latest
+  # container_name: insight_calc
+  # ports:
+  #   - "5201:5201"
+  # environment:
+  #   - HAZOO_BASE_URL=http://host.docker.internal:5202
+  # extra_hosts:
+  #   - "host.docker.internal:host-gateway"
+  # restart: unless-stopped
 
   redis:
     image: redis:alpine
