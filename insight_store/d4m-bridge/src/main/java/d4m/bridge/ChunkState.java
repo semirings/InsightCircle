@@ -1,63 +1,41 @@
 package d4m.bridge;
 
-import java.util.List;
-
-import org.apache.accumulo.core.data.Range;
-
 public class ChunkState {
-    
+
     private String tableName;
     private String payload;
     private String lastSeenRow;
-    private List<Range> ranges;
-    private int currentIndex = 0;
+    private String whereClause;   // SQL WHERE predicate built from the D4M query
+    private int    currentOffset; // OFFSET for next BigQuery page
+    private int    pageSize;      // LIMIT per chunk
 
     public ChunkState() {}
 
-    public ChunkState(String tableName, String payload, String lastSeenRow, List<Range> ranges) {
-        this.tableName = tableName;
-        this.payload = payload;
-        this.lastSeenRow = lastSeenRow;
-        this.ranges = ranges;
+    public ChunkState(String tableName, String payload, String lastSeenRow,
+                      String whereClause, int currentOffset, int pageSize) {
+        this.tableName     = tableName;
+        this.payload       = payload;
+        this.lastSeenRow   = lastSeenRow;
+        this.whereClause   = whereClause;
+        this.currentOffset = currentOffset;
+        this.pageSize      = pageSize;
     }
 
-     public String getTableName() {
-        return tableName;
-    }
+    public String getTableName()             { return tableName; }
+    public void   setTableName(String v)     { this.tableName = v; }
 
-    public void setTableName(String tableName) {
-        this.tableName = tableName;
-    }
+    public String getPayload()               { return payload; }
+    public void   setPayload(String v)       { this.payload = v; }
 
-    public String getPayload() {
-        return payload;
-    }
+    public String getLastSeenRow()           { return lastSeenRow; }
+    public void   setLastSeenRow(String v)   { this.lastSeenRow = v; }
 
-    public void setPayload(String payload) {
-        this.payload = payload;
-    }
+    public String getWhereClause()           { return whereClause; }
+    public void   setWhereClause(String v)   { this.whereClause = v; }
 
-    public String getLastSeenRow() {
-        return lastSeenRow;
-    }
+    public int    getCurrentOffset()         { return currentOffset; }
+    public void   setCurrentOffset(int v)    { this.currentOffset = v; }
 
-    public void setLastSeenRow(String lastSeenRow) {
-        this.lastSeenRow = lastSeenRow;
-    }
-
-    public void setRanges(List<Range> ranges) {
-        this.ranges = ranges;
-    }
-
-    public List<Range> getRanges() {
-        return ranges;
-    }
-
-    public int getCurrentIndex() {
-        return currentIndex;
-    }
-
-    public void setCurrentIndex(int currentIndex) {
-        this.currentIndex = currentIndex;
-    }
+    public int    getPageSize()              { return pageSize; }
+    public void   setPageSize(int v)         { this.pageSize = v; }
 }

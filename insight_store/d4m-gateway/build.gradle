@@ -21,9 +21,6 @@ dependencies {
   // keep one web starter; if libs.springWeb == spring-boot-starter-web, you don’t need both
   implementation libs.springWeb
   implementation libs.springActuator
-  implementation libs.springStarterDataRedis
-  implementation libs.springSessionDataRedis
-
   // the Log4j2 backend
   implementation 'org.springframework.boot:spring-boot-starter-log4j2'
 }

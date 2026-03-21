@@ -1,12 +1,6 @@
 version: "3.9"
 
 services:
-  redis:
-    image: redis:alpine
-    container_name: redis
-    ports:
-      - "6379:6379"
-
   insight_store:
     build:
       context: .
@@ -15,12 +9,9 @@ services:
     container_name: insight_store
     ports:
       - "5202:5202"
-      - "9997:9997" 
+      - "9997:9997"
     environment:
-      - SPRING_REDIS_HOST=redis
-      - SPRING_REDIS_PORT=6379
-      - ACCUMULO_CLIENT_PROPS=/app/client.properties
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - BIGQUERY_DATASET=${BIGQUERY_DATASET:-d4m}
     volumes:
       - ./client.properties:/app/client.properties
-    depends_on:
-      - redis

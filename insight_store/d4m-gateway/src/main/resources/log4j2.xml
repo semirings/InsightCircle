@@ -8,8 +8,7 @@
     <Loggers>
         <Logger name="d4m.gateway" level="DEBUG"/>
         <Logger name="d4m.bridge" level="DEBUG"/>
-        <Logger name="org.apache.accumulo.core.client.impl.TableOperationsImpl" level="DEBUG"/>
-        <Root level="INFO">
+<Root level="INFO">
             <AppenderRef ref="Console"/>
         </Root>
     </Loggers>

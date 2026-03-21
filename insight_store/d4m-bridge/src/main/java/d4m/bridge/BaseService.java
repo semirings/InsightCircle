@@ -1,38 +1,34 @@
 package d4m.bridge;
 
-import java.nio.file.Paths;
 import java.util.Objects;
 
-import org.apache.accumulo.core.client.Accumulo;
-import org.apache.accumulo.core.client.AccumuloClient;
-import org.apache.accumulo.core.client.security.tokens.PasswordToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.hadoop.io.Text;
+
+import com.google.cloud.bigquery.BigQuery;
 
 /**
- * BaseService: Provides authenticated Accumulo client and common constants.
- * Subclasses can use the protected 'client' field for table operations.
+ * BaseService: Provides a BigQuery client and common D4M table decoration constants.
+ * Subclasses use the protected fields for table operations and queries.
  */
 public abstract class BaseService {
 
 	private static final Logger log = LoggerFactory.getLogger(BaseService.class);
+
     // --- Constants accessible to subclasses ---
-    protected static final String PAIR_DECOR = "T";
+    protected static final String PAIR_DECOR   = "T";
     protected static final String DEGREE_DECOR = "Deg";
-    protected static final Text FAMILY = new Text(""); // reserved, may never be used
 
     // --- Protected client ---
-    protected final AccumuloClient client;
+    protected final BigQuery bigQuery;
+    protected final String   projectId;
+    protected final String   datasetId;
 
-    /**
-     * Constructor: use prebuilt client (for dependency injection)
-     *
-     * @param client a fully authenticated AccumuloClient
-     */
-    protected BaseService(AccumuloClient client) {
-		log.info("BaseService==>");
-        this.client = Objects.requireNonNull(client, "AccumuloClient must not be null");
-		log.debug("auth.principal=={}", client.properties().getProperty("auth.principal"));
+    protected BaseService(BigQuery bigQuery, String projectId, String datasetId) {
+        log.info("BaseService==>");
+        this.bigQuery   = Objects.requireNonNull(bigQuery,   "BigQuery must not be null");
+        this.projectId  = Objects.requireNonNull(projectId,  "projectId must not be null");
+        this.datasetId  = Objects.requireNonNull(datasetId,  "datasetId must not be null");
+        log.debug("projectId=={} datasetId=={}", projectId, datasetId);
     }
 }

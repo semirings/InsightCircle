@@ -1,0 +1,48 @@
+grammar d4m.acc.query.D4MQuery with org.eclipse.xtext.common.Terminals
+
+generate d4MQuery "http://fhir.genalytics.platform/d4m/D4MQuery"
+
+D4MQuery:
+	query=QueryExpr
+;
+
+QueryExpr:
+	row=AxisExpr ',' col=AxisExpr
+;
+
+AxisExpr:
+	  RowColWildcard
+	| RangeExpr
+	| ListExpr
+	| StartsWithExpr
+	| RegexExpr
+	| LiteralExpr
+;
+
+RowColWildcard returns RowColWildcard:
+    {RowColWildcard} ':'
+;
+
+RangeExpr:
+	from=STRING '..' to=STRING
+;
+
+ListExpr:
+	'[' values+=(STRING | ID) (',' values+=(STRING | ID))* ']'
+;
+
+StartsWithExpr:
+	'StartsWith' '(' prefix=(STRING | ID) ')'
+;
+
+RegexExpr:
+	'Regex' '(' pattern=(STRING | ID) ')'
+;
+
+LiteralExpr:
+	value=(STRING | ID)
+;
+
+terminal ID: 
+	('a'..'z' | 'A'..'Z' | '_') 
+	('a'..'z' | 'A'..'Z' | '0'..'9' | '_' | '.' | '-')*;
