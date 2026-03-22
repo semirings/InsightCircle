@@ -1,0 +1,23 @@
+name = "InsightCalc"
+uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+version = "0.1.0"
+authors = ["InsightCircle"]
+
+[deps]
+Dates      = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GoogleCloud = "6c608d2a-47d6-4b9b-b5d4-2b5e6c2e1d5f"
+HTTP       = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON3      = "0f8b85d8-7e73-11e9-2db5-fb645b04fc27"
+Logging    = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Oxygen     = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
+
+# D4M.jl local fork — run `julia --project -e 'import Pkg; Pkg.develop(path="../../D4M.jl")'`
+# to register it, after which it appears in Manifest.toml automatically.
+# D4M = "ca196bdc-a701-11e8-3d50-3b5cc8577617"
+
+[compat]
+julia = "1.9"
+
+[sources]
+# Uncomment once Julia 1.11+ is the target; for 1.9/1.10 use Pkg.develop instead.
+# D4M = {path = "../../D4M.jl"}
