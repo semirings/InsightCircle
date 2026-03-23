@@ -1,13 +1,10 @@
-"""
-    InsightCalc
-
-HTTP microservice that receives segmentation results, runs D4M.jl analytics,
-and integrates with GCP/BigQuery.  Acts as both an HTTP server (Oxygen.jl)
-and an HTTP client (HTTP.jl) to communicate with sibling microservices.
-"""
+# InsightCalc
+# HTTP microservice that receives segmentation results, runs D4M.jl analytics,
+# and integrates with GCP/BigQuery.  Acts as both an HTTP server (Oxygen.jl)
+# and an HTTP client (HTTP.jl) to communicate with sibling microservices.
 module InsightCalc
 
-const PROJECT_ROOT = dirname(@__DIR__) 
+const PROJECT_ROOT = dirname(@__DIR__)
 const DATA_DIR = joinpath(PROJECT_ROOT, "data")
 
 using Dates
@@ -16,6 +13,7 @@ using JSON3
 using HTTP
 using Oxygen
 using GoogleCloud
+using .InsightCalc
 
 # ── Optional: uncomment once D4M.jl is registered via Pkg.develop ────────────
 # using D4M
@@ -39,17 +37,9 @@ const SERVER_TASK = Ref{Union{Nothing, Task}}(nothing)
 # GCP / BigQuery
 # ---------------------------------------------------------------------------
 
-"""
-    init_bq_client(key_path::String) -> GoogleCloud.GoogleSession
-
-Initialise a GCP session from a service-account JSON key file and store it
-in the module-level `BQ_SESSION` ref.  Call this before any BigQuery work.
-
-# Example
-```julia
-InsightCalc.init_bq_client("/secrets/gcp-sa-key.json")
-```
-"""
+# init_bq_client(key_path::String) -> GoogleCloud.GoogleSession
+# Initialise a GCP session from a service-account JSON key file and store it
+# in the module-level BQ_SESSION ref.  Call this before any BigQuery work.
 function init_bq_client(key_path::String)::GoogleCloud.GoogleSession
     @info "Initialising GCP session" key_path
     creds   = GoogleCloud.JSONCredentials(key_path)
@@ -59,11 +49,8 @@ function init_bq_client(key_path::String)::GoogleCloud.GoogleSession
     return session
 end
 
-"""
-    bq_session() -> GoogleCloud.GoogleSession
-
-Return the active BQ session, raising an error if it has not been initialised.
-"""
+# bq_session() -> GoogleCloud.GoogleSession
+# Return the active BQ session, raising an error if it has not been initialised.
 function bq_session()::GoogleCloud.GoogleSession
     isnothing(BQ_SESSION[]) && error("BQ session not initialised — call init_bq_client() first")
     return BQ_SESSION[]
@@ -73,12 +60,9 @@ end
 # HTTP client helpers (calling sibling microservices)
 # ---------------------------------------------------------------------------
 
-"""
-    post_json(url::String, body) -> JSON3.Object
-
-POST `body` (serialised to JSON) to `url` and return the parsed response.
-Throws on non-2xx status.
-"""
+# post_json(url::String, body) -> JSON3.Object
+# POST body (serialised to JSON) to url and return the parsed response.
+# Throws on non-2xx status.
 function post_json(url::String, body)
     payload  = JSON3.write(body)
     headers  = ["Content-Type" => "application/json", "Accept" => "application/json"]
@@ -86,11 +70,8 @@ function post_json(url::String, body)
     return JSON3.read(response.body)
 end
 
-"""
-    get_json(url::String; headers = []) -> JSON3.Object
-
-GET `url` and return the parsed JSON response.
-"""
+# get_json(url::String; headers = []) -> JSON3.Object
+# GET url and return the parsed JSON response.
 function get_json(url::String; headers = [])
     response = HTTP.get(url, ["Accept" => "application/json", headers...])
     return JSON3.read(response.body)
@@ -100,12 +81,9 @@ end
 # Analytics stubs (D4M integration point)
 # ---------------------------------------------------------------------------
 
-"""
-    analyse_segments(segments) -> Dict
-
-Placeholder for D4M.jl analytics over SAM segmentation results.
-Replace the body with real D4M triple-store operations once D4M is loaded.
-"""
+# analyse_segments(segments) -> Dict
+# Placeholder for D4M.jl analytics over SAM segmentation results.
+# Replace the body with real D4M triple-store operations once D4M is loaded.
 function analyse_segments(segments)
     # TODO: convert `segments` to a D4M.Assoc and run analytics
     # Example (once `using D4M` is active):
@@ -119,11 +97,8 @@ end
 # Route handlers
 # ---------------------------------------------------------------------------
 
-"""
-GET /health
-
-Liveness probe.  Returns service name and uptime as JSON.
-"""
+# GET /health
+# Liveness probe. Returns service name and uptime as JSON.
 @get "/health" function(_req::HTTP.Request)
     uptime_s = round(Int, (now() - START_TIME[]).value / 1_000)
     return json(Dict(
@@ -133,12 +108,9 @@ Liveness probe.  Returns service name and uptime as JSON.
     ))
 end
 
-"""
-POST /analyse
-
-Receive a JSON body of SAM segmentation results from the Python microservice
-and run D4M analytics.  Expected body: `{"video_id": "...", "segments": [...]}`.
-"""
+# POST /analyse
+# Receive a JSON body of SAM segmentation results from the Python microservice
+# and run D4M analytics.  Expected body: {"video_id": "...", "segments": [...]}.
 @post "/analyse" function(req::HTTP.Request)
     body = JSON3.read(req.body)
 
@@ -157,17 +129,13 @@ end
 # Server lifecycle
 # ---------------------------------------------------------------------------
 
-"""
-    start_server(; host="0.0.0.0", port=8080, async=true)
-
-Start the Oxygen HTTP server.  When `async=true` (default) the server runs in
-a background task and the call returns immediately, which is required for
-embedding inside a larger Julia process.  When `async=false` the call blocks.
-
-Multi-threading: set `JULIA_NUM_THREADS` before launching Julia to allow
-Oxygen to dispatch handlers on the thread pool.
-"""
-function start_server(; host::String = "0.0.0.0", port::Int = 8080, async::Bool = true)
+# start_server(; host="0.0.0.0", port=8080, async=true)
+# Start the Oxygen HTTP server.  When async=true (default) the server runs in
+# a background task and the call returns immediately, which is required for
+# embedding inside a larger Julia process.  When async=false the call blocks.
+# Multi-threading: set JULIA_NUM_THREADS before launching Julia to allow
+# Oxygen to dispatch handlers on the thread pool.
+function start_server(; host::String = "0.0.0.0", port::Int = 5200, async::Bool = true)
     START_TIME[] = now()
     @info "Starting InsightCalc server" host port async
 
@@ -180,15 +148,13 @@ function start_server(; host::String = "0.0.0.0", port::Int = 8080, async::Bool 
     end
 end
 
-"""
-    stop_server()
-
-Gracefully shut down the Oxygen server if running in async mode.
-"""
+# stop_server()
+# Gracefully shut down the Oxygen server if running in async mode.
 function stop_server()
     Oxygen.terminate()
     SERVER_TASK[] = nothing
     @info "InsightCalc server stopped"
 end
 
+start_server(host="0.0.0.0", port = 5200, async=false)
 end # module InsightCalc

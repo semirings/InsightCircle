@@ -6,5 +6,10 @@
 		{
 			"path": "../D4M.jl"
 		}
-	]
+	],
+	"settings": {
+		"java.project.sourcePaths": [
+			"semirings"
+		]
+	}
 }

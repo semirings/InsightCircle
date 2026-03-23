@@ -1,0 +1,15 @@
+[Unit]
+Description=InsightCircle Calculation Tier (Julia)
+After=network.target
+
+[Service]
+User=gcr
+WorkingDirectory=/home/gcr/populi.Wk/InsightCircle/insight_calc
+# Force the service to use your user's Julia depot
+Environment=JULIA_DEPOT_PATH=/home/gcr/.julia
+Environment=JULIA_PROJECT=/home/gcr/populi.Wk/InsightCircle/insight_calc
+ExecStart=/home/gcr/.juliaup/bin/julia --project=. ./src/main.jl
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
