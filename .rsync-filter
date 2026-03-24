@@ -1,4 +1,14 @@
 - Project.toml
 - Manifest.toml
-- .julia/
+- insight_cals/Project.toml
+- insight_cals/Manifest.toml
+- /.julia/
 - dev/
+- venv/
+- .DS_Store
+- .git/
+- rsy.sh
+- vm.sh
+- .rsync-filter
+- .env
+- doc

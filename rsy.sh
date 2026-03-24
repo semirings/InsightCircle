@@ -5,6 +5,7 @@ REMOTE=insight-dev-node.us-central1-a.creator-d4m-2026-1774038056
 
 rsync -avzP --delete \
   --rsync-path="mkdir -p ~/populi.Wk/InsightCircle && rsync" \
+  --exclude-from='.rsync-filter' \
   ~/populi.Wk/InsightCircle/ \
   "${REMOTE}:~/populi.Wk/InsightCircle/"
 
