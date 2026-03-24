@@ -15,6 +15,8 @@ using Oxygen
 using GoogleCloud
 using .InsightCalc
 
+include("services.jl")
+
 # ── Optional: uncomment once D4M.jl is registered via Pkg.develop ────────────
 # using D4M
 # -----------------------------------------------------------------------------
@@ -123,6 +125,28 @@ end
         "video_id" => body.video_id,
         "result"   => result,
     ))
+end
+
+# GET /tables
+# Return the list of all Accumulo tables in the instance.
+@get "/tables" function()
+    tables = listTables()
+    return json(Dict("tables" => tables, "count" => length(tables)))
+end
+
+# Endpoint to initialize the schema
+@post "/tables/create" function(req::HTTP.Request)
+    data = JSON3.read(req.body)
+    
+    if !haskey(data, :tableName)
+        return json(Dict("error" => "Missing tableName"), status=400)
+    end
+    
+    if createMetadataTable(string(data.tableName))
+        return json(Dict("status" => "success", "table" => data.tableName))
+    else
+        return json(Dict("status" => "error", "message" => "Check hazoo/D4M logs"), status=500)
+    end
 end
 
 # ---------------------------------------------------------------------------
