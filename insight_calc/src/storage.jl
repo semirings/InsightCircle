@@ -1,4 +1,4 @@
-module InsightStorage
+module 
 
 using GoogleCloud
 using JSON3

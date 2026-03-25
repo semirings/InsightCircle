@@ -10,7 +10,7 @@ println("🚀 Activating InsightCircle Calculation Environment in $project_dir")
 Pkg.activate(".")
 
 # Core dependencies for the API and Data layers
-core_deps = ["Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Pluto"]
+core_deps = ["Pkg", "Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Pluto"]
 
 println("📦 Ensuring core dependencies are present...")
 # This syntax is more resilient to registry UUID shifts

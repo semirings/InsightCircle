@@ -10,5 +10,4 @@
 - rsy.sh
 - vm.sh
 - .rsync-filter
-- .env
 - doc

@@ -4,20 +4,23 @@ version = "0.1.0"
 authors = ["InsightCircle"]
 
 [deps]
-Dates      = "ade2ca70-3891-5945-98fb-dc099432e06a"
-GoogleCloud = "6c608d2a-47d6-4b9b-b5d4-2b5e6c2e1d5f"
-HTTP       = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-JSON3      = "0f8b85d8-7e73-11e9-2db5-fb645b04fc27"
-Logging    = "56ddb016-857b-54e1-b83d-db4d58db5568"
-Oxygen     = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
-
-# D4M.jl local fork — run `julia --project -e 'import Pkg; Pkg.develop(path="../../D4M.jl")'`
-# to register it, after which it appears in Manifest.toml automatically.
-# D4M = "ca196bdc-a701-11e8-3d50-3b5cc8577617"
+D4M = "ca196bdc-a701-11e8-3d50-3b5cc8577617"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GoogleCloud = "55e21f81-8b0a-565e-b5ad-6816892a5ee7"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Oxygen = "df9a0d86-3283-4920-82dc-4555fc0d1d8b"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
+Pluto = "c3e4b0f8-55cb-11ea-2926-15256bba5781"
+StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
 
 [compat]
+GoogleCloud = "0.11.0"
+HTTP = "1.11.0"
+JSON3 = "1.14.3"
+Oxygen = "1.7.5"
+Pkg = "1.12.1"
+Pluto = "0.20.24"
+StructTypes = "1.11.0"
 julia = "1.9"
-
-[sources]
-# Uncomment once Julia 1.11+ is the target; for 1.9/1.10 use Pkg.develop instead.
-# D4M = {path = "../../D4M.jl"}
