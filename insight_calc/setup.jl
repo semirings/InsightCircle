@@ -9,24 +9,29 @@ cd(project_dir)
 println("🚀 Activating InsightCircle Calculation Environment in $project_dir")
 Pkg.activate(".")
 
-# Core dependencies for the API and Data layers
-core_deps = ["Pkg", "Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Pluto"]
+# 1. Clean out any old registry-based D4M references to avoid UUID conflicts
+try
+    Pkg.rm("D4M")
+catch
+    # It's fine if it wasn't there
+end
+
+# Core dependencies (Standard Registered Packages Only)
+core_deps = ["Pkg", "Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Pluto", "Automa", "Test", "Logging"]
 
 println("📦 Ensuring core dependencies are present...")
-# This syntax is more resilient to registry UUID shifts
 Pkg.add(core_deps)
 
-# Path to your D4M fork (Relative to insight_calc)
+# 2. Link the local fork using your path logic
 d4m_path = "../D4M.jl" 
 
 if isdir(joinpath(project_dir, d4m_path))
-    println("🔗 Linking local D4M.jl fork...")
-    # develop() ensures your local changes are used instead of a registered version
+    println("🔗 Linking local D4M.jl fork from $d4m_path...")
     Pkg.develop(path=d4m_path)
 else
-    # Fallback check if the path is actually one level up from the root
     alt_path = "../../D4M.jl"
     if isdir(joinpath(project_dir, alt_path))
+        println("🔗 Linking local D4M.jl fork from $alt_path...")
         Pkg.develop(path=alt_path)
     else
         @error "❌ D4M.jl directory not found. Please check your rsync structure."
@@ -34,9 +39,9 @@ else
     end
 end
 
-println("⚙️ Resolving and Precompiling (this may take a minute)...")
+println("⚙️ Finalizing Environment...")
 Pkg.resolve()
 Pkg.instantiate()
 Pkg.precompile()
 
-println("✅ Environment is healthy. Project.toml and Manifest.toml updated.")
+println("✅ Environment is healthy for Julia 1.11.")
