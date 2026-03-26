@@ -1,7 +1,9 @@
 #!/usr/bin/env julia
 
 using Pkg
-Pkg.activate(".")
+import Pkg
+Pkg.activate(@__DIR__) # Activates the environment where the script lives
+Pkg.instantiate()      # Optional: ensures all deps are actually installed
 
 using Pluto
 
