@@ -2,6 +2,7 @@
 # Translates MATLAB-style D4M strings into BigQuery SQL params or D4M.jl getindex calls.
 
 using Automa
+using Logging
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AST Types
@@ -22,7 +23,7 @@ struct PrefixNode <: D4MNode; prefix::String                                  en
 # Token types (emitted by the Automa FSM)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@enum TokenKind TK_IDENT TK_RANGE_OP TK_STAR TK_COMMA TK_COLON
+@enum TokenKind TK_IDENT TK_RANGE_OP TK_STAR TK_COMMA TK_COLON TK_WS TK_ERROR
 
 struct Token
     kind  :: TokenKind
@@ -30,55 +31,35 @@ struct Token
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Automa grammar definitions
-# re"" patterns are combined into a lexer machine.
-# Actions use onenter!/onexit! semantics to mark byte positions.
+# Automa 1.x tokenizer
+# make_tokenizer defines Base.iterate(::Tokenizer{TokenKind,...}) via @eval.
+# Longest-match wins; TK_ERROR is emitted for unrecognised bytes.
 # ─────────────────────────────────────────────────────────────────────────────
 
-const _LEX_MACHINE = let
-    # Terminals
-    ident    = re"[A-Za-z0-9_\-./]+"  # key characters used in D4M row/col labels
-    range_op = re"\.\."               # range separator
-    star     = re"\*"                 # prefix wildcard
-    comma    = re","                  # list delimiter
-    colon    = re":"                  # all-wildcard / query separator
-    ws       = re"[ \t]+"             # ignored whitespace
+make_tokenizer((
+    TK_ERROR,
+    [
+        TK_IDENT    => re"[A-Za-z0-9_\-/]+",
+        TK_RANGE_OP => re"\.\.",
+        TK_STAR     => re"\*",
+        TK_COMMA    => re",",
+        TK_COLON    => re":",
+        TK_WS       => re"[ \t]+",
+    ]
+)) |> eval
 
-    # onenter! hooks — record start byte of the current token
-    ident.actions[:enter]    = [:mark]
-
-    # onexit! hooks — emit token from [mark, p)
-    ident.actions[:exit]     = [:emit_ident]
-    range_op.actions[:exit]  = [:emit_range_op]
-    star.actions[:exit]      = [:emit_star]
-    comma.actions[:exit]     = [:emit_comma]
-    colon.actions[:exit]     = [:emit_colon]
-
-    Automa.compile(ident | range_op | star | comma | colon | ws)
-end
-
-# Generated FSM execution function.
-# Produces a Vector{Token} from raw bytes.
-@eval function _lex(data::Vector{UInt8})::Vector{Token}
+function _lex(s::String)::Vector{Token}
     tokens = Token[]
-    mark   = 1
-
-    $(Automa.generate_exec_code(
-        _LEX_MACHINE;
-        actions = Dict(
-            :mark         => :(mark = p),
-            :emit_ident   => :(push!(tokens, Token(TK_IDENT,    String(data[mark:p-1])))),
-            :emit_range_op => :(push!(tokens, Token(TK_RANGE_OP, ".."))),
-            :emit_star    => :(push!(tokens, Token(TK_STAR,     "*"))),
-            :emit_comma   => :(push!(tokens, Token(TK_COMMA,    ","))),
-            :emit_colon   => :(push!(tokens, Token(TK_COLON,    ":"))),
-        )
-    ))
-
+    for (pos, len, kind) in tokenize(TokenKind, s)
+        kind == TK_ERROR && error("Unexpected input at byte $pos: $(repr(s[pos:pos+Int(len)-1]))")
+        kind == TK_WS    && continue
+        value = s[pos : pos + Int(len) - 1]
+        push!(tokens, Token(kind, value))
+        @debug "[lex]" kind value
+    end
+    @debug "[lex] result" tokens
     return tokens
 end
-
-_lex(s::AbstractString) = _lex(Vector{UInt8}(s))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Parser — converts token stream into AST
@@ -110,19 +91,29 @@ function _parseItem(p::_Parser)::D4MNode
         _consume(p)   # consume ".."
         t2 = _consume(p)
         t2.kind == TK_IDENT || error("Expected identifier after '..', got $(t2)")
-        return RangeNode(t.value, t2.value)
+        node = RangeNode(t.value, t2.value)
+        @debug "[parse] RangeNode" start=t.value stop=t2.value
+        return node
     elseif !isnothing(next) && next.kind == TK_STAR
         _consume(p)   # consume "*"
-        return PrefixNode(t.value)
+        node = PrefixNode(t.value)
+        @debug "[parse] PrefixNode" prefix=t.value
+        return node
     else
-        return ScalarNode(t.value)
+        node = ScalarNode(t.value)
+        @debug "[parse] ScalarNode" value=t.value
+        return node
     end
 end
 
 function _parseExpr(tokens::Vector{Token})::D4MNode
-    isempty(tokens) && return AllNode()
+    if isempty(tokens)
+        @debug "[parse] AllNode (empty token list)"
+        return AllNode()
+    end
     # A lone COLON token signals the all-wildcard
     if length(tokens) == 1 && tokens[1].kind == TK_COLON
+        @debug "[parse] AllNode (lone ':')"
         return AllNode()
     end
 
@@ -135,21 +126,35 @@ function _parseExpr(tokens::Vector{Token})::D4MNode
             _consume(p)
         end
     end
-    return length(items) == 1 ? items[1] : SetNode(items)
+    if length(items) == 1
+        return items[1]
+    else
+        node = SetNode(items)
+        @debug "[parse] SetNode" count=length(items)
+        return node
+    end
 end
 
 function _splitOnSeparator(tokens::Vector{Token})
     # Find the first COLON that is the row/col separator.
     # A lone COLON (tokens == [COLON]) is AllNode, not a separator.
     idx = findfirst(t -> t.kind == TK_COLON, tokens)
-    isnothing(idx) && return (tokens, Token[Token(TK_COLON, ":")])
+    if isnothing(idx)
+        @debug "[parse] no ':' separator — treating all as row, cols=all"
+        return (tokens, Token[Token(TK_COLON, ":")])
+    end
+    @debug "[parse] ':' separator at token index" idx
     return (tokens[1:idx-1], tokens[idx+1:end])
 end
 
 function _parse(input::String)::QueryNode
-    tokens               = _lex(input)
+    tokens = _lex(input)
+    @debug "[parse] tokens" tokens
     row_tokens, col_tokens = _splitOnSeparator(tokens)
-    return QueryNode(_parseExpr(row_tokens), _parseExpr(col_tokens))
+    rows = _parseExpr(row_tokens)
+    cols = _parseExpr(col_tokens)
+    @debug "[parse] QueryNode" rows cols
+    return QueryNode(rows, cols)
 end
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,8 +162,11 @@ end
 # ─────────────────────────────────────────────────────────────────────────────
 
 function scan(input::String, target::QueryTarget)
-    ast = _parse(input)
-    return target == BigQueryTarget ? generateBqParams(ast) : applyD4mMath(ast)
+    @debug "[scan] begin" input target
+    ast    = _parse(input)
+    result = target == BigQueryTarget ? generateBqParams(ast) : applyD4mMath(ast)
+    @debug "[scan] result" result
+    return result
 end
 
 # ─────────────────────────────────────────────────────────────────────────────

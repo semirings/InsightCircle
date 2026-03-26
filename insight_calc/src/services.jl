@@ -1,34 +1,57 @@
-using D4M
 using Dates
+using GoogleCloud
 
-# Module-level connection — instantiated once, reused across all functions.
-const DB_INSTANCE = "accumulo"
-const DB_HOST     = "zk-node-1:2181"
-const DB_USER     = "hazoo_admin"
-const DB_PASS     = "accumulo_pass"
+# ── BigQuery connection types ─────────────────────────────────────────────────
 
-const _SERVER = Ref{Union{Nothing, DBserver}}(nothing)
-const _TABLE  = Ref{Union{Nothing, DBtable}}(nothing)
+struct BQServer
+    project :: String
+    dataset :: String
+    session :: GoogleCloud.GoogleSession
+end
 
-# getServer() -> DBserver
-# Return the cached DBserver, creating it if not yet initialised.
-function getServer()::DBserver
+struct BQTable
+    server  :: BQServer
+    name    :: String
+    dataset :: String
+end
+BQTable(srv::BQServer, name::String) = BQTable(srv, name, srv.dataset)
+
+# ── Module-level singletons ───────────────────────────────────────────────────
+# Credentials are read from GOOGLE_APPLICATION_CREDENTIALS at runtime.
+
+const BQ_PROJECT = get(ENV, "BQ_PROJECT", "")
+const BQ_DATASET = get(ENV, "BQ_DATASET", "insight_metadata")
+
+const _SERVER = Ref{Union{Nothing, BQServer}}(nothing)
+const _TABLE  = Ref{Union{Nothing, BQTable}}(nothing)
+
+function dbsetup(projectId::String, dataset::String)::BQServer
+    keyPath = get(ENV, "GOOGLE_APPLICATION_CREDENTIALS", "")
+    isempty(keyPath) && error("Set GOOGLE_APPLICATION_CREDENTIALS environment variable")
+    creds   = GoogleCloud.JSONCredentials(keyPath)
+    session = GoogleCloud.GoogleSession(creds, ["https://www.googleapis.com/auth/bigquery"])
+    return BQServer(projectId, dataset, session)
+end
+
+# getServer() -> BQServer
+# Return the cached BQServer, creating it if not yet initialised.
+function getServer()::BQServer
     if isnothing(_SERVER[])
-        _SERVER[] = dbsetup(DB_INSTANCE, DB_HOST, DB_USER, DB_PASS)
+        isempty(BQ_PROJECT) && error("Set BQ_PROJECT environment variable")
+        _SERVER[] = dbsetup(BQ_PROJECT, BQ_DATASET)
     end
     return _SERVER[]
 end
 
-# getDB(tableName) -> DBtable
-# Return a cached DBtable for tableName, creating it via the server if needed.
-function getDB(tableName::String)::DBtable
+# getDB(tableName) -> BQTable
+# Return a cached BQTable for tableName, creating it via the server if needed.
+function getDB(tableName::String)::BQTable
     if isnothing(_TABLE[])
-        _TABLE[] = getServer()[tableName]
+        _TABLE[] = BQTable(getServer(), tableName)
     end
     return _TABLE[]
 end
 
-# Use camelCase per project style
 function createMetadataTable(tableName::String)
     try
         getDB(tableName)
@@ -41,7 +64,7 @@ function createMetadataTable(tableName::String)
 end
 
 # listTables() -> Vector{String}
-# Return all table names currently registered in the Accumulo instance.
+# Return all table names in the BigQuery dataset.
 function listTables()::Vector{String}
     try
         return ls(getServer())
@@ -56,8 +79,6 @@ function insertVideoMetadata(tableName::String, videoData::Dict)
         db  = getDB(tableName)
         row = videoData["id"]
         for (key, val) in videoData["snippet"]
-            # D4M Associative Array logic: A[row, col] = val
-            # Mapping nested YT API structure to flat Accumulo columns
             setindex!(db, string(val), row, "meta:$key")
         end
         return true

@@ -8,11 +8,11 @@ include("../src/automata.jl")
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Convenience: parse a query string and return the QueryNode AST
-parseQ(s) = InsightCalc._parse(s)
+parseQ(s) = _parse(s)
 
 # Convenience wrappers
-bq(s)  = InsightCalc.generateBqParams(parseQ(s))
-d4m(s) = InsightCalc.applyD4mMath(parseQ(s))   # returns (row_str, col_str)
+bq(s)  = generateBqParams(parseQ(s))
+d4m(s) = applyD4mMath(parseQ(s))   # returns (row_str, col_str)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Scalar row, all cols — rowId :

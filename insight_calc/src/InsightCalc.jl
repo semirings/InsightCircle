@@ -18,10 +18,6 @@ using .InsightCalc
 include("services.jl")
 include("storage.jl")
 
-# ── Optional: uncomment once D4M.jl is registered via Pkg.develop ────────────
-# using D4M
-# -----------------------------------------------------------------------------
-
 export startServer, stopServer, initBqClient, fetchBqChunk
 
 # ---------------------------------------------------------------------------
