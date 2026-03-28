@@ -18,4 +18,12 @@ rsync -avzP --delete \
   ~/populi.Wk/D4M.jl/ \
   "${REMOTE}:~/populi.Wk/D4M.jl/"
 
+# Pull notebooks from remote back to local
+rsync -avzP \
+  --include='*/' \
+  --include='*.ipynb' \
+  --exclude='*' \
+  "${REMOTE}:~/populi.Wk/InsightCircle/" \
+  ~/populi.Wk/InsightCircle/
+
 ssh "${REMOTE}" "bash ~/populi.Wk/InsightCircle/insight_calc/ctl.sh"
