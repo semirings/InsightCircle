@@ -17,7 +17,7 @@ catch
 end
 
 # Core dependencies (Standard Registered Packages Only)
-core_deps = ["Pkg", "Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Pluto", "Automa", "Test", "Logging"]
+core_deps = ["Pkg", "Oxygen", "JSON3", "HTTP", "StructTypes", "GoogleCloud", "Automa", "Test", "Logging", "DotEnv", "DataFrames"]
 
 println("📦 Ensuring core dependencies are present...")
 Pkg.add(core_deps)

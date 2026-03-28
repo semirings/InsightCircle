@@ -1,13 +1,24 @@
-- Project.toml
-- Manifest.toml
-- insight_cals/Project.toml
-- insight_cals/Manifest.toml
-- /.julia/
-- dev/
-- venv/
+# --- PROTECT REMOTE WORK ---
+# This prevents local (potentially older) notebooks from overwriting remote ones
+- *.ipynb
+
+# --- IGNORE LOCAL SYSTEM JUNK ---
 - .DS_Store
 - .git/
+- .vscode/
+- .idea/
+
+# --- IGNORE ENVIRONMENTS & ARTIFACTS ---
+# Do not sync local Julia registries or Python venvs
+- /.julia/
+- /venv/
+- /node_modules/
+- .env*
+
+# --- IGNORE SCRIPTS & DOCS ---
 - rsy.sh
 - vm.sh
-- .rsync-filter
-- doc
+- /doc/
+
+# --- ALLOW EVERYTHING ELSE ---
++ *

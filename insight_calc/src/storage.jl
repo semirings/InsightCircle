@@ -1,6 +1,7 @@
 # storage.jl — BigQuery connection, session management, and streaming query results.
 # All BQ I/O lives here. No business logic.
 
+using DotEnv
 using GoogleCloud
 using HTTP
 using JSON3
@@ -22,13 +23,15 @@ end
 BQTable(srv::BQServer, name::String) = BQTable(srv, name, srv.dataset)
 
 # ── Module-level singletons ───────────────────────────────────────────────────
-
+const PROJECT_ROOT = abspath(joinpath(@__DIR__, "../.."))
+const ENV_PATH = joinpath(PROJECT_ROOT, ".env")            
+@info "ENV_PATH==$ENV_PATH"
 const BQ_PROJECT = get(ENV, "BQ_PROJECT", "")
 const BQ_DATASET = get(ENV, "BQ_DATASET", "insight_metadata")
 
 const _SERVER = Ref{Union{Nothing, BQServer}}(nothing)
 
-function dbsetup(projectId::String, dataset::String)::BQServer
+function dbSetup(projectId::String, dataset::String)::BQServer
     keyPath = get(ENV, "GOOGLE_APPLICATION_CREDENTIALS", "")
     isempty(keyPath) && error("Set GOOGLE_APPLICATION_CREDENTIALS environment variable")
     creds   = GoogleCloud.JSONCredentials(keyPath)
@@ -38,8 +41,20 @@ end
 
 function getServer()::BQServer
     if isnothing(_SERVER[])
-        isempty(BQ_PROJECT) && error("Set BQ_PROJECT environment variable")
-        _SERVER[] = dbsetup(BQ_PROJECT, BQ_DATASET)
+
+        if isfile(ENV_PATH)
+            DotEnv.load!(ENV_PATH)
+        else
+            @warn ".env not found at $ENV_PATH. Using system ENV."
+        end
+        
+        if isempty(BQ_PROJECT)
+            @error "Environment variables missing" path=pwd()
+            error("Set BQ_PROJECT in .env")
+        end
+        
+        # Initialize the actual connection object
+        _SERVER[] = dbSetup(BQ_PROJECT, BQ_DATASET)
     end
     return _SERVER[]
 end
@@ -49,7 +64,26 @@ end
 const _BQ_BASE = "https://bigquery.googleapis.com/bigquery/v2"
 
 function _authHeaders(session::GoogleCloud.GoogleSession)
-    token = session.oauth.access_token
+    # 1. FORCE AUTHORIZATION: If the dict is empty, trigger a refresh
+    if isempty(session.authorization)
+        @info "Session is unauthorized. Fetching new token..."
+        GoogleCloud.authorize(session)
+    end
+
+    auth_dict = session.authorization
+    
+    # 2. Extract the token (usually :token or :access_token)
+    token = get(auth_dict, :token, get(auth_dict, :access_token, ""))
+    
+    if token == ""
+        # Last-ditch: maybe it's a string key?
+        token = get(auth_dict, "access_token", "")
+    end
+
+    if token == ""
+        error("Authorization succeeded but no token was returned. Keys: $(keys(auth_dict))")
+    end
+    
     return ["Authorization" => "Bearer $token", "Content-Type" => "application/json"]
 end
 
@@ -58,7 +92,10 @@ end
 function listTables()::Vector{String}
     srv  = getServer()
     url  = "$_BQ_BASE/projects/$(srv.project)/datasets/$(srv.dataset)/tables"
+    
+    # The header function will now handle the 0-entry Dict problem
     resp = HTTP.get(url, _authHeaders(srv.session))
+    
     payload = JSON3.read(resp.body)
     tables  = get(payload, :tables, [])
     return [String(t.tableReference.tableId) for t in tables]
