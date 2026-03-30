@@ -17,7 +17,7 @@ include("automata.jl")
 include("algebra.jl")
 include("services.jl")
 
-export startServer, stopServer, bqToMap, BQChunk, scan, BQResult, BQParam, toApiParams
+export startServer, stopServer, bqToMap, BQChunk, scan, BQResult, BQParam, toApiParams, queryYtMetadata
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
