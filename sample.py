@@ -12,6 +12,7 @@ import json
 import sys
 import time
 import random
+from collections import defaultdict
 from yt_dlp import YoutubeDL
 
 # ---------------------------------------------------------------------------
@@ -75,9 +76,10 @@ def fetch_keyword(keyword: str, ydl: YoutubeDL) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    written = 0
+    seen:         dict[str, dict]  = {}                # id → record
+    video_terms:  dict[str, list]  = defaultdict(list) # id → [query_terms]
 
-    with open(OUTPUT_FILE, "a", encoding="utf-8") as out, YoutubeDL(YDL_OPTS) as ydl:
+    with YoutubeDL(YDL_OPTS) as ydl:
         for i, keyword in enumerate(KEYWORDS):
             try:
                 entries = fetch_keyword(keyword, ydl)
@@ -88,13 +90,15 @@ def main() -> None:
             for entry in entries:
                 try:
                     record = extract_metadata(entry, keyword)
-                    out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    written += 1
+                    vid_id = record["id"]
+                    if vid_id not in seen:
+                        seen[vid_id] = record
+                    video_terms[vid_id].append(keyword)
                 except Exception as exc:
                     vid_id = entry.get("id", "<unknown>")
                     print(f"[error] video={vid_id}: {exc}", file=sys.stderr)
 
-            print(f"[done]  {keyword!r}: {len(entries)} entries (total written: {written})", flush=True)
+            print(f"[done]  {keyword!r}: {len(entries)} entries (total unique: {len(seen)})", flush=True)
 
             # Jitter between buckets to avoid rate-limiting (skip after last keyword)
             if i < len(KEYWORDS) - 1:
@@ -102,7 +106,12 @@ def main() -> None:
                 print(f"[sleep] {sleep_s:.1f}s", flush=True)
                 time.sleep(sleep_s)
 
-    print(f"\nFinished. {written} records written to {OUTPUT_FILE}")
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
+        for vid_id, record in seen.items():
+            record["query_term"] = video_terms[vid_id]
+            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    print(f"\nFinished. {len(seen)} unique videos written to {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

@@ -27,9 +27,9 @@ d4m(s) = applyD4mMath(parseQ(s))   # returns (row_str, col_str)
 
     # BigQuery target
     r = bq("rowId:")
-    @test r.row_clause == "row_key = ?"
+    @test r.row_clause == "row_key = @p1"
     @test r.col_clause == "TRUE"
-    @test r.params == ["rowId"]
+    @test r.params == [BQParam("p1", "rowId")]
 
     # D4M target
     row_str, col_str = d4m("rowId:")
@@ -50,8 +50,8 @@ end
 
     r = bq(":colName")
     @test r.row_clause == "TRUE"
-    @test r.col_clause == "col_key = ?"
-    @test r.params == ["colName"]
+    @test r.col_clause == "col_key = @p1"
+    @test r.params == [BQParam("p1", "colName")]
 
     row_str, col_str = d4m(":colName")
     @test row_str == ":"
@@ -72,9 +72,9 @@ end
     @test q.cols isa AllNode
 
     r = bq("rowId1,rowId2,rowId3:")
-    @test r.row_clause == "(row_key = ? OR row_key = ? OR row_key = ?)"
+    @test r.row_clause == "(row_key = @p1 OR row_key = @p2 OR row_key = @p3)"
     @test r.col_clause == "TRUE"
-    @test r.params == ["rowId1", "rowId2", "rowId3"]
+    @test r.params == [BQParam("p1","rowId1"), BQParam("p2","rowId2"), BQParam("p3","rowId3")]
 
     row_str, col_str = d4m("rowId1,rowId2,rowId3:")
     @test row_str == "rowId1,rowId2,rowId3,"
@@ -95,8 +95,8 @@ end
 
     r = bq(":colName1,colName2,colName3")
     @test r.row_clause == "TRUE"
-    @test r.col_clause == "(col_key = ? OR col_key = ? OR col_key = ?)"
-    @test r.params == ["colName1", "colName2", "colName3"]
+    @test r.col_clause == "(col_key = @p1 OR col_key = @p2 OR col_key = @p3)"
+    @test r.params == [BQParam("p1","colName1"), BQParam("p2","colName2"), BQParam("p3","colName3")]
 
     row_str, col_str = d4m(":colName1,colName2,colName3")
     @test row_str == ":"
@@ -116,9 +116,9 @@ end
     @test q.cols isa AllNode
 
     r = bq("rowId1..rowId5:")
-    @test r.row_clause == "row_key BETWEEN ? AND ?"
+    @test r.row_clause == "row_key BETWEEN @p1 AND @p2"
     @test r.col_clause == "TRUE"
-    @test r.params == ["rowId1", "rowId5"]
+    @test r.params == [BQParam("p1","rowId1"), BQParam("p2","rowId5")]
 
     row_str, col_str = d4m("rowId1..rowId5:")
     @test row_str == "rowId1..rowId5,"
@@ -139,8 +139,8 @@ end
 
     r = bq(":colName1..colName5")
     @test r.row_clause == "TRUE"
-    @test r.col_clause == "col_key BETWEEN ? AND ?"
-    @test r.params == ["colName1", "colName5"]
+    @test r.col_clause == "col_key BETWEEN @p1 AND @p2"
+    @test r.params == [BQParam("p1","colName1"), BQParam("p2","colName5")]
 
     row_str, col_str = d4m(":colName1..colName5")
     @test row_str == ":"
@@ -159,8 +159,8 @@ end
     @test q.cols isa AllNode
 
     r = bq("vid*:")
-    @test r.row_clause == "row_key LIKE ?"
-    @test r.params == ["vid%"]
+    @test r.row_clause == "row_key LIKE @p1"
+    @test r.params == [BQParam("p1","vid%")]
 
     row_str, col_str = d4m("vid*:")
     @test row_str == "StartsWith(vid)"
@@ -194,7 +194,7 @@ end
 @testset "scan() end-to-end" begin
     r = scan("rowId1,rowId2:colName", BigQueryTarget)
     @test r isa BQResult
-    @test r.params == ["rowId1", "rowId2", "colName"]
+    @test r.params == [BQParam("p1","rowId1"), BQParam("p2","rowId2"), BQParam("p3","colName")]
 
     row_str, col_str = scan("rowId1..rowId5:colName", D4MTarget)
     @test row_str == "rowId1..rowId5,"

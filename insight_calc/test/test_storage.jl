@@ -1,8 +1,4 @@
 # test_storage.jl — Unit tests for getServer and dbSetup (storage.jl)
-#
-# NOTE: A bug exists in getServer(): lines 53/59 reference `proj` and `dataset`
-# (undefined locals) instead of the module constants BQ_PROJECT and BQ_DATASET.
-# Test 5 documents this failure until it is fixed.
 
 using Test
 using Logging
@@ -131,37 +127,5 @@ end
     end
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. getServer — exposes UndefVarError bug (proj / dataset not defined)
-#    Remove / replace this test once the bug is fixed to use BQ_PROJECT /
-#    BQ_DATASET.
-# ─────────────────────────────────────────────────────────────────────────────
-
-@testset "getServer — UndefVarError bug (proj/dataset)" begin
-    saved = _SERVER[]
-    try
-        _SERVER[] = nothing
-        mktempdir() do root
-            # getServer() now does dirname(dirname(active_project())):
-            #   active_project() → root/pkg/Project.toml
-            #   dirname(...)     → root/pkg
-            #   dirname(...)     → root   ← .env lives here
-            pkg_dir = joinpath(root, "pkg")
-            mkdir(pkg_dir)
-            keypath = fake_key_file(root)
-            write(joinpath(root, ".env"), "BQ_PROJECT=test-proj\nBQ_DATASET=test-ds\n")
-            write(joinpath(pkg_dir, "Project.toml"), "[deps]\n")
-            withenv(
-                "GOOGLE_APPLICATION_CREDENTIALS" => keypath,
-                "JULIA_PROJECT" => pkg_dir
-            ) do
-                # Expected: UndefVarError(:proj) until the bug is fixed
-                @test_throws UndefVarError getServer()
-            end
-        end
-    finally
-        _SERVER[] = saved
-    end
-end
 
 println("All storage tests passed.")

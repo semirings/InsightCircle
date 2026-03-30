@@ -172,23 +172,28 @@ end
 Execute `sqlClause` in us-central1 and return the first chunk as a BQChunk.
 Mapping: rows=video_id, cols=timestamp, vals=metric_value.
 """
-function bqToMap(sqlClause::String; chunkSize::Int = 10_000)::BQChunk
+function bqToMap(sqlClause::String; queryParameters::Vector=[], chunkSize::Int = 10_000)::BQChunk
     srv   = getServer()
-    jobId = _submitJob(srv.session, srv.project, sqlClause)
+    jobId = _submitJob(srv.session, srv.project, sqlClause; queryParameters)
     @debug "[bqToMap] job submitted" jobId
     return _fetchPage(srv.session, srv.project, jobId, nothing, chunkSize)
 end
 
 function _submitJob(session::GoogleCloud.GoogleSession, projectId::String,
-                    sqlClause::String)::String
+                    sqlClause::String; queryParameters::Vector=[])::String
     url  = "$_BQ_BASE/projects/$projectId/jobs"
+    query_config = Dict{String,Any}(
+        "query"        => sqlClause,
+        "useLegacySql" => false,
+        "location"     => "us-central1",
+    )
+    if !isempty(queryParameters)
+        query_config["parameterMode"]   = "NAMED"
+        query_config["queryParameters"] = queryParameters
+    end
     body = JSON3.write(Dict(
         "configuration" => Dict(
-            "query" => Dict(
-                "query"        => sqlClause,
-                "useLegacySql" => false,
-                "location"     => "us-central1",
-            )
+            "query" => query_config,
         )
     ))
     resp  = HTTP.post(url, _authHeaders(session), body)
@@ -227,24 +232,55 @@ function _fetchPage(session::GoogleCloud.GoogleSession, projectId::String,
 end
 
 function _rowsToAssoc(rows, fields)::Assoc
-    rowKeys = String[]
-    colKeys = String[]
-    vals    = String[]
-
     fieldNames   = [String(f.name) for f in fields]
     videoIdIdx   = findfirst(==("video_id"),     fieldNames)
     timestampIdx = findfirst(==("timestamp"),    fieldNames)
     metricIdx    = findfirst(==("metric_value"), fieldNames)
+    return _rowsToAssocEAV(rows, fieldNames, fieldNames[videoIdIdx],
+                           _fixedColAssoc=true,
+                           colIdx=timestampIdx, valIdx=metricIdx)
+end
+
+"""
+    rowsToAssoc(payload, rowKeyCol) -> Assoc
+
+Convert a raw BQ query payload to an EAV Assoc.
+- rowKeyCol: name of the column to use as the Assoc row key
+- All other columns become (rowKey, colName) → value triples.
+"""
+function rowsToAssoc(payload, rowKeyCol::String)::Assoc
+    fieldNames = [String(f.name) for f in payload.schema.fields]
+    return _rowsToAssocEAV(payload.rows, fieldNames, rowKeyCol)
+end
+
+function _rowsToAssocEAV(rows, fieldNames::Vector{String}, rowKeyCol::String;
+                          _fixedColAssoc::Bool=false,
+                          colIdx::Union{Int,Nothing}=nothing,
+                          valIdx::Union{Int,Nothing}=nothing)::Assoc
+    rowKeyIdx = findfirst(==(rowKeyCol), fieldNames)
+    isnothing(rowKeyIdx) && error("Column '$rowKeyCol' not found in fields: $fieldNames")
+
+    rowKeys = String[]
+    colKeys = String[]
+    vals    = String[]
 
     for row in rows
-        cells     = row.f
-        videoId   = String(cells[videoIdIdx].v)
-        timestamp = String(cells[timestampIdx].v)
-        metricVal = String(cells[metricIdx].v)
-        push!(rowKeys, videoId)
-        push!(colKeys, timestamp)
-        push!(vals,    metricVal)
-        @debug "[_rowsToAssoc]" videoId timestamp metricVal
+        cells  = row.f
+        rowKey = isnothing(cells[rowKeyIdx].v) ? "" : String(cells[rowKeyIdx].v)
+        if _fixedColAssoc
+            # Legacy: single (rowKey, timestamp) → metric_value triple per row
+            push!(rowKeys, rowKey)
+            push!(colKeys, isnothing(cells[colIdx].v) ? "" : String(cells[colIdx].v))
+            push!(vals,    isnothing(cells[valIdx].v) ? "" : String(cells[valIdx].v))
+        else
+            # EAV: one triple per cell
+            for (col, cell) in zip(fieldNames, cells)
+                push!(rowKeys, rowKey)
+                push!(colKeys, col)
+                push!(vals,    isnothing(cell.v) ? "" : String(cell.v))
+            end
+        end
+        @debug "[_rowsToAssocEAV]" rowKey
     end
 
     isempty(rowKeys) && return Assoc(String[], String[], String[])

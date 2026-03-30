@@ -13,10 +13,11 @@ using D4M
 
 # Load order matters: storage first (defines BQ types), then algebra, then services.
 include("storage.jl")
+include("automata.jl")
 include("algebra.jl")
 include("services.jl")
 
-export startServer, stopServer, bqToMap, BQChunk
+export startServer, stopServer, bqToMap, BQChunk, scan, BQResult, BQParam, toApiParams
 
 # ── Global state ──────────────────────────────────────────────────────────────
 

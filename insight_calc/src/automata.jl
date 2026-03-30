@@ -174,32 +174,66 @@ end
 # Produces parameterised SQL to prevent injection.
 # ─────────────────────────────────────────────────────────────────────────────
 
+struct BQParam
+    name  :: String
+    value :: String
+end
+
 struct BQResult
     row_clause :: String
     col_clause :: String
-    params     :: Vector{Any}
+    params     :: Vector{BQParam}
 end
 
-generateBqParams(q::QueryNode) = BQResult(
-    _bqClause(q.rows, "row_key"),
-    _bqClause(q.cols, "col_key"),
-    vcat(_bqParams(q.rows), _bqParams(q.cols)),
-)
+"""
+    toApiParams(params) -> Vector{Dict{String,Any}}
 
-# Clause builders
-_bqClause(::AllNode,      col::String) = "TRUE"
-_bqClause(n::ScalarNode,  col::String) = "$col = ?"
-_bqClause(n::RangeNode,   col::String) = "$col BETWEEN ? AND ?"
-_bqClause(n::PrefixNode,  col::String) = "$col LIKE ?"
-_bqClause(n::SetNode,     col::String) =
-    "(" * join([_bqClause(e, col) for e in n.elements], " OR ") * ")"
+Convert `BQParam` values to the BQ REST API `queryParameters` array format.
+"""
+function toApiParams(params::Vector{BQParam})::Vector{Dict{String,Any}}
+    return [Dict{String,Any}(
+        "name"           => p.name,
+        "parameterType"  => Dict("type" => "STRING"),
+        "parameterValue" => Dict("value" => p.value),
+    ) for p in params]
+end
 
-# Parameter extractors
-_bqParams(::AllNode)     = Any[]
-_bqParams(n::ScalarNode) = Any[n.value]
-_bqParams(n::RangeNode)  = Any[n.start, n.stop]
-_bqParams(n::PrefixNode) = Any[n.prefix * "%"]
-_bqParams(n::SetNode)    = vcat([_bqParams(e) for e in n.elements]...)
+function generateBqParams(q::QueryNode)::BQResult
+    ctr = Ref(0)
+    row_clause, row_params = _bqBuild(q.rows, "row_key", ctr)
+    col_clause, col_params = _bqBuild(q.cols, "col_key", ctr)
+    return BQResult(row_clause, col_clause, vcat(row_params, col_params))
+end
+
+_bqBuild(::AllNode, col::String, ctr::Ref{Int}) =
+    ("TRUE", BQParam[])
+
+function _bqBuild(n::ScalarNode, col::String, ctr::Ref{Int})
+    ctr[] += 1;  name = "p$(ctr[])"
+    return ("$col = @$name", [BQParam(name, n.value)])
+end
+
+function _bqBuild(n::RangeNode, col::String, ctr::Ref{Int})
+    ctr[] += 1;  n1 = "p$(ctr[])"
+    ctr[] += 1;  n2 = "p$(ctr[])"
+    return ("$col BETWEEN @$n1 AND @$n2", [BQParam(n1, n.start), BQParam(n2, n.stop)])
+end
+
+function _bqBuild(n::PrefixNode, col::String, ctr::Ref{Int})
+    ctr[] += 1;  name = "p$(ctr[])"
+    return ("$col LIKE @$name", [BQParam(name, n.prefix * "%")])
+end
+
+function _bqBuild(n::SetNode, col::String, ctr::Ref{Int})
+    clauses = String[]
+    params  = BQParam[]
+    for e in n.elements
+        c, p = _bqBuild(e, col, ctr)
+        push!(clauses, c)
+        append!(params, p)
+    end
+    return ("(" * join(clauses, " OR ") * ")", params)
+end
 
 # ─────────────────────────────────────────────────────────────────────────────
 # D4M dispatcher — multiple dispatch on D4MNode types
