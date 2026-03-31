@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
-sample.py — Collect YouTube metadata for the Consortium dataset.
+sample.py — Collect YouTube metadata (and optionally videos) for the Consortium dataset.
 
 Usage:
-    python sample.py
+    python sample.py                     # metadata only
+    python sample.py --download-videos   # metadata + video → GCS
 Output:
     consortium_pilot.jsonl  (NDJSON, one video per line)
 """
 
 import json
+import os
 import sys
 import time
 import random
+import argparse
+import tempfile
+from pathlib import Path
 from collections import defaultdict
 from yt_dlp import YoutubeDL
 
@@ -19,8 +24,9 @@ from yt_dlp import YoutubeDL
 # Configuration
 # ---------------------------------------------------------------------------
 
-OUTPUT_FILE = "consortium_pilot.jsonl"
+OUTPUT_FILE     = "consortium_pilot.jsonl"
 RESULTS_PER_QUERY = 250
+GCS_BUCKET      = "insight-circle-raw"
 
 KEYWORDS = [
     "machine learning tutorial",
@@ -40,10 +46,61 @@ YDL_OPTS = {
     "skip_download": True,
     "quiet": True,
     "no_warnings": True,
-    "ignoreerrors": True, # Ensures one bad video doesn't kill the whole keyword batch
+    "ignoreerrors": True,
 }
+
+YDL_VIDEO_OPTS = {
+    "format": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]",
+    "merge_output_format": "mp4",
+    "quiet": True,
+    "no_warnings": True,
+    "ignoreerrors": True,
+}
+
 # ---------------------------------------------------------------------------
-# Helpers
+# GCS helpers
+# ---------------------------------------------------------------------------
+
+def _gcs_client():
+    from google.cloud import storage  # lazy import — only needed with --download-videos
+    return storage.Client()
+
+
+def upload_to_gcs(local_path: Path, video_id: str) -> str:
+    """Upload *local_path* to gs://GCS_BUCKET/{video_id}.mp4 and return the URI."""
+    client = _gcs_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob_name = f"{video_id}.mp4"
+    blob = bucket.blob(blob_name)
+    blob.upload_from_filename(str(local_path), content_type="video/mp4")
+    gcs_uri = f"gs://{GCS_BUCKET}/{blob_name}"
+    print(f"[gcs]   uploaded {video_id} → {gcs_uri}", flush=True)
+    return gcs_uri
+
+
+def fetch_and_store_video(video_id: str) -> str:
+    """
+    Download *video_id* from YouTube into a temp directory, upload to GCS,
+    delete the local file, and return the GCS URI.
+    """
+    yt_url = f"https://www.youtube.com/watch?v={video_id}"
+    with tempfile.TemporaryDirectory() as tmp:
+        opts = {**YDL_VIDEO_OPTS, "outtmpl": str(Path(tmp) / "%(id)s.%(ext)s")}
+        with YoutubeDL(opts) as ydl:
+            ydl.download([yt_url])
+        candidates = list(Path(tmp).glob(f"{video_id}.*"))
+        if not candidates:
+            raise FileNotFoundError(f"yt-dlp produced no file for {video_id}")
+        local_path = candidates[0]
+        # Normalise extension to .mp4 for a consistent GCS key
+        if local_path.suffix != ".mp4":
+            renamed = local_path.with_suffix(".mp4")
+            local_path.rename(renamed)
+            local_path = renamed
+        return upload_to_gcs(local_path, video_id)
+
+# ---------------------------------------------------------------------------
+# Metadata helpers
 # ---------------------------------------------------------------------------
 
 def extract_metadata(entry: dict, query_term: str) -> dict:
@@ -61,6 +118,7 @@ def extract_metadata(entry: dict, query_term: str) -> dict:
         "tags":         entry.get("tags") or [],
         "category":     cats[0] if cats else None,
         "query_term":   query_term,
+        "gcs_uri":      None,  # populated later if --download-videos
     }
 
 
@@ -70,14 +128,20 @@ def fetch_keyword(keyword: str, ydl: YoutubeDL) -> list[dict]:
     info = ydl.extract_info(url, download=False)
     return info.get("entries") or []
 
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    seen:         dict[str, dict]  = {}                # id → record
-    video_terms:  dict[str, list]  = defaultdict(list) # id → [query_terms]
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--download-videos", action="store_true",
+        help="Download each video and push to GCS (gs://insight-circle-raw/)",
+    )
+    args = parser.parse_args()
+
+    seen:        dict[str, dict] = {}
+    video_terms: dict[str, list] = defaultdict(list)
 
     with YoutubeDL(YDL_OPTS) as ydl:
         for i, keyword in enumerate(KEYWORDS):
@@ -100,11 +164,20 @@ def main() -> None:
 
             print(f"[done]  {keyword!r}: {len(entries)} entries (total unique: {len(seen)})", flush=True)
 
-            # Jitter between buckets to avoid rate-limiting (skip after last keyword)
             if i < len(KEYWORDS) - 1:
                 sleep_s = random.uniform(2, 5)
                 print(f"[sleep] {sleep_s:.1f}s", flush=True)
                 time.sleep(sleep_s)
+
+    # ── Optional: download each video and push to GCS ──────────────────────
+    if args.download_videos:
+        print(f"\n[video] downloading {len(seen)} videos to gs://{GCS_BUCKET}/", flush=True)
+        for vid_id, record in seen.items():
+            try:
+                record["gcs_uri"] = fetch_and_store_video(vid_id)
+            except Exception as exc:
+                print(f"[error] video download {vid_id}: {exc}", file=sys.stderr)
+                record["gcs_uri"] = None
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as out:
         for vid_id, record in seen.items():

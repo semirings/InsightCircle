@@ -3,6 +3,27 @@
 
 using HTTP
 using JSON3
+using DataFrames
+
+# ── AA ↔ DataFrame ───────────────────────────────────────────────────────────
+
+"""
+    aa2df(aa::Assoc) -> DataFrame
+
+Convert an Assoc to a wide DataFrame. Rows are the unique row keys of the
+Assoc; columns are the unique col keys; values are the cell values (empty
+string where no entry exists).
+"""
+function aa2df(aa::Assoc)::DataFrame
+    rows, cols, vals = find(aa)
+    all_rows = unique(rows)
+    all_cols = unique(cols)
+    lookup   = Dict(zip(zip(rows, cols), vals))
+    return DataFrame(
+        "row" => all_rows,
+        [c => [get(lookup, (r, c), "") for r in all_rows] for c in all_cols]...
+    )
+end
 
 # ── HTTP client helpers ───────────────────────────────────────────────────────
 
