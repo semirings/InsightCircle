@@ -13,6 +13,8 @@ import json
 import os
 import sys
 import time
+from datetime import datetime
+from typing import Optional
 import random
 import argparse
 import tempfile
@@ -102,23 +104,75 @@ def fetch_and_store_video(video_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Metadata helpers
 # ---------------------------------------------------------------------------
-
+def _parse_upload_date(val: Optional[str]) -> Optional[str]:
+    """
+    Normalize upload_date to ISO (YYYY-MM-DD).
+    yt-dlp often returns YYYYMMDD.
+    """
+    if not val:
+        return None
+    try:
+        if len(val) == 8 and val.isdigit():
+            return datetime.strptime(val, "%Y%m%d").date().isoformat()
+        return val  # already formatted or unknown format
+    except Exception:
+        return None
+    
 def extract_metadata(entry: dict, query_term: str) -> dict:
     cats = entry.get("categories") or []
+    tags = entry.get("tags") or []
+
+    width = entry.get("width")
+    height = entry.get("height")
+
+    aspect_ratio = None
+    try:
+        if width and height:
+            aspect_ratio = round(width / height, 4)
+    except Exception:
+        pass
+
     return {
-        "id":           entry.get("id"),
-        "title":        entry.get("title"),
-        "views":        entry.get("view_count"),
-        "likes":        entry.get("like_count"),
-        "comments":     entry.get("comment_count"),
-        "duration":     entry.get("duration"),
-        "upload_date":  entry.get("upload_date"),
-        "uploader":     entry.get("uploader"),
-        "subscribers":  entry.get("channel_follower_count"),
-        "tags":         entry.get("tags") or [],
-        "category":     cats[0] if cats else None,
-        "query_term":   query_term,
-        "gcs_uri":      None,  # populated later if --download-videos
+        # ===== ORIGINAL FIELDS (unchanged) =====
+        "id": entry.get("id"),
+        "title": entry.get("title"),
+        "views": entry.get("view_count"),
+        "likes": entry.get("like_count"),
+        "comments": entry.get("comment_count"),
+        "duration": entry.get("duration"),
+        "upload_date": _parse_upload_date(entry.get("upload_date")),
+        "uploader": entry.get("uploader"),
+        "subscribers": entry.get("channel_follower_count"),
+        "tags": tags,
+        "category": cats[0] if cats else None,
+        "query_term": query_term,
+        "gcs_uri": None,  # preserved
+
+        # ===== ADDITIONS (safe to ignore if unused) =====
+
+        # Identifiers / graph expansion
+        "channel_id": entry.get("channel_id"),
+        "uploader_id": entry.get("uploader_id"),
+        "webpage_url": entry.get("webpage_url"),
+        "channel_url": entry.get("channel_url"),
+
+        # Content / ML
+        "description": entry.get("description"),
+        "language": entry.get("language"),
+        "availability": entry.get("availability"),
+        "live_status": entry.get("live_status"),
+
+        # Full categorization (don’t lose info)
+        "categories": cats,
+
+        # Media properties (critical for video/frame work)
+        "width": width,
+        "height": height,
+        "aspect_ratio": aspect_ratio,
+        "fps": entry.get("fps"),
+
+        # Extra engagement signal
+        "average_rating": entry.get("average_rating"),
     }
 
 
