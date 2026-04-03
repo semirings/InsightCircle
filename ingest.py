@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-sample.py — Collect YouTube metadata (and optionally videos) for the Consortium dataset.
+ingest.py — Collect YouTube metadata (and optionally videos) for the Consortium dataset.
 
 Usage:
-    python sample.py                     # metadata only
-    python sample.py --download-videos   # metadata + video → GCS
+    python ingest.py                     # metadata only
+    python ingest.py --download-videos   # metadata + video → GCS
 Output:
     consortium_pilot.jsonl  (NDJSON, one video per line)
 """
@@ -26,9 +26,9 @@ from yt_dlp import YoutubeDL
 # Configuration
 # ---------------------------------------------------------------------------
 
-OUTPUT_FILE     = "consortium_pilot.jsonl"
+OUTPUT_FILE     = "insightcircle.jsonl"
 RESULTS_PER_QUERY = 250
-GCS_BUCKET      = "insight-circle-raw"
+GCS_BUCKET      = "insightcircle-bucket"
 
 KEYWORDS = [
     "machine learning tutorial",
@@ -44,7 +44,6 @@ KEYWORDS = [
 ]
 
 YDL_OPTS = {
-    "extract_flat": "in_playlist",
     "skip_download": True,
     "quiet": True,
     "no_warnings": True,
@@ -77,6 +76,18 @@ def upload_to_gcs(local_path: Path, video_id: str) -> str:
     blob.upload_from_filename(str(local_path), content_type="video/mp4")
     gcs_uri = f"gs://{GCS_BUCKET}/{blob_name}"
     print(f"[gcs]   uploaded {video_id} → {gcs_uri}", flush=True)
+    return gcs_uri
+
+
+def upload_output_to_gcs(local_path: str) -> str:
+    """Upload *local_path* to gs://GCS_BUCKET/{filename} and return the URI."""
+    client = _gcs_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob_name = Path(local_path).name
+    blob = bucket.blob(blob_name)
+    blob.upload_from_filename(local_path, content_type="application/x-ndjson")
+    gcs_uri = f"gs://{GCS_BUCKET}/{blob_name}"
+    print(f"[gcs]   uploaded {local_path} → {gcs_uri}", flush=True)
     return gcs_uri
 
 
@@ -239,6 +250,8 @@ def main() -> None:
             out.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     print(f"\nFinished. {len(seen)} unique videos written to {OUTPUT_FILE}")
+
+    upload_output_to_gcs(OUTPUT_FILE)
 
 
 if __name__ == "__main__":
