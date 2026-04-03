@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import '../widgets/ingest_action_card.dart';
+import '../widgets/loader_action_card.dart';
 import '../widgets/looker_embed.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -224,6 +225,8 @@ class _SideNavBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: const [
           IngestActionCard(),
+          SizedBox(height: 12),
+          LoaderActionCard(),
         ],
       ),
     );
