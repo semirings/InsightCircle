@@ -13,7 +13,7 @@ _BUCKET_NAME = "insightcircle_bucket"
 _PREFIX      = "ingest/"
 
 
-@app.get("/ingest", response_model=list[str], summary="List files in ingest/")
+@app.get("/ingest_files", response_model=list[str], summary="List files in ingest/")
 def list_ingest_files() -> list[str]:
     """Return the names of all objects under gs://insightcircle_bucket/ingest/."""
     try:

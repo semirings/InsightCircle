@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../theme.dart';
+
+const _kIngestFilesUrl = 'http://localhost:5203/ingest_files';
 
 // ── Palette ────────────────────────────────────────────────────────────────
 
@@ -35,6 +40,7 @@ class IngestActionCard extends StatefulWidget {
 class _IngestActionCardState extends State<IngestActionCard> {
   String? _selected;
   bool _addingNew = false;
+  bool _loading = false;
   final _newFileCtrl = TextEditingController();
   late List<String> _files;
 
@@ -42,6 +48,24 @@ class _IngestActionCardState extends State<IngestActionCard> {
   void initState() {
     super.initState();
     _files = List<String>.from(widget.bucketFiles);
+    _fetchFiles();
+  }
+
+  Future<void> _fetchFiles() async {
+    setState(() => _loading = true);
+    try {
+      final response = await http.get(Uri.parse(_kIngestFilesUrl));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = jsonDecode(response.body);
+        setState(() {
+          _files = data.cast<String>();
+        });
+      }
+    } catch (_) {
+      // keep whatever was seeded via widget.bucketFiles
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   @override
@@ -96,11 +120,22 @@ class _IngestActionCardState extends State<IngestActionCard> {
           const SizedBox(height: 14),
 
           // ── Bucket pick-list ─────────────────────────────────────────────
-          _BucketDropdown(
-            files: _files,
-            selected: _selected,
-            onChanged: (v) => setState(() => _selected = v),
-          ),
+          _loading
+              ? const Center(
+                  child: SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white54,
+                    ),
+                  ),
+                )
+              : _BucketDropdown(
+                  files: _files,
+                  selected: _selected,
+                  onChanged: (v) => setState(() => _selected = v),
+                ),
           const SizedBox(height: 8),
 
           // ── Add-new-file row ─────────────────────────────────────────────

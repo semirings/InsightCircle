@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/insightcircle/insight_store
-ExecStart=/opt/insightcircle/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8100
+WorkingDirectory=/home/gcr/populi.Wk/InsightCircle/insight_store
+ExecStart=/home/gcr/populi.Wk/InsightCircle/venv/bin/uvicorn main:app --host 0.0.0.0 --port 5203
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
