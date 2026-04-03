@@ -1,5 +1,4 @@
 # --- PROTECT REMOTE WORK ---
-# This prevents local (potentially older) notebooks from overwriting remote ones
 - *.ipynb
 
 # --- IGNORE LOCAL SYSTEM JUNK ---
@@ -8,8 +7,27 @@
 - .vscode/
 - .idea/
 
-# --- IGNORE ENVIRONMENTS & ARTIFACTS ---
-# Do not sync local Julia registries or Python venvs
+# --- FLUTTER / DART SPECIFIC (NEW) ---
+# Never sync the build folder; it's platform-specific and huge
+- /build/
+# Internal Flutter cache and plugin links
+- /.dart_tool/
+- /.flutter-plugins
+- /.flutter-plugins-dependencies
+- /pubspec.lock
+# If using FVM for version management
+- /.fvm/flutter_sdk
+
+# --- APPLE NATIVE ARTIFACTS (NEW) ---
+# Do not sync generated native pods or workspace state
+- /ios/Pods/
+- /macos/Pods/
+- /ios/.symlinks/
+- /macos/.symlinks/
+- *.xcworkspace
+- DerivedData/
+
+# --- ENVIRONMENTS & ARTIFACTS ---
 - /.julia/
 - /venv/
 - /node_modules/
