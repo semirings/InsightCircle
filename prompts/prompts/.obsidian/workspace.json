@@ -69,16 +69,30 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Action Cards.md",
+                "file": "Clippings/The \"Multi-Platform\" Strategic Analysis.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Action Cards"
+              "title": "The \"Multi-Platform\" Strategic Analysis"
+            }
+          },
+          {
+            "id": "458bbbed522ebb60",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "terraform_impl.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "terraform_impl"
             }
           }
         ],
-        "currentTab": 4
+        "currentTab": 5
       }
     ],
     "direction": "vertical"
@@ -240,12 +254,15 @@
       "bases:Create new base": false
     }
   },
-  "active": "169366610688fdb9",
+  "active": "458bbbed522ebb60",
   "lastOpenFiles": [
+    "Clippings/The \"Multi-Platform\" Strategic Analysis.md",
+    "terraform_impl.md",
+    "Clippings/Strategic Value Proposition.md",
+    "Action Cards.md",
     "Commands.md",
     "Clippings/List the sites offering yt analytics..md",
     "Clippings/RSA Oauth.md",
-    "Action Cards.md",
     "Ingest -- add table name arg.md",
     "ingest.md",
     "Clippings/YT-DLP Attributes.md",

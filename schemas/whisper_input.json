@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "whisper_input",
+  "title": "whisper_input",
+  "type": "object",
+  "required": ["version", "video_id"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version identifier"
+    },
+    "video_id": {
+      "type": "string",
+      "description": "Unique identifier for the video to transcribe"
+    }
+  },
+  "additionalProperties": false
+}
