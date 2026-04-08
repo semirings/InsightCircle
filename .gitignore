@@ -89,3 +89,7 @@ GoogleService-Info.plist
 *.sln
 *.sw?
 .DS_Store
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars

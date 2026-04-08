@@ -9,6 +9,9 @@ ExecStart=/home/gcr/populi.Wk/InsightCircle/venv/bin/uvicorn main:app --host 0.0
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+Environment=GOOGLE_CLOUD_PROJECT=creator-d4m-2026-1774038056
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/home/gcr/auth/insight-service-account.json
+Environment=WHISPER_COMPLETION_SUBSCRIPTION=projects/creator-d4m-2026-1774038056/subscriptions/whisper-completion-sub
 
 [Install]
 WantedBy=multi-user.target

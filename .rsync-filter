@@ -31,7 +31,7 @@
 - /.julia/
 - /venv/
 - /node_modules/
-- .env*
+# - .env*
 
 # --- IGNORE SCRIPTS & DOCS ---
 - rsy.sh

@@ -167,8 +167,12 @@ def list_ingest_files() -> list[str]:
 @app.get("/metadata/tables", response_model=list[str], summary="List BQ tables in insight_metadata")
 async def list_insight_tables() -> list[str]:
     """Return the table IDs in the insight_metadata BigQuery dataset."""
+    log.info("list_insight_tables reached")
     try:
         tables = _bq_client.list_tables(_BQ_DATASET)
-        return [table.table_id for table in tables]
+        table_ids = [table.table_id for table in tables]
+        log.info("list_insight_tables returning %d tables: %s", len(table_ids), table_ids)
+        return table_ids
     except Exception as exc:
+        log.exception("list_insight_tables failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

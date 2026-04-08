@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
+# setuptools must be in the main env so openai-whisper's legacy setup.py
+# can find pkg_resources when built with --no-build-isolation.
+RUN pip install --no-cache-dir setuptools wheel
+RUN pip install --no-cache-dir --no-build-isolation openai-whisper==20240930
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
