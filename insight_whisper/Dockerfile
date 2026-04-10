@@ -15,7 +15,6 @@ RUN pip install --no-cache-dir --no-build-isolation openai-whisper==20240930
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
-COPY cookies.txt .
 
 # Pre-download the Whisper model at build time so cold starts are fast.
 # Override with WHISPER_MODEL env var (tiny/base/small/medium/large).
