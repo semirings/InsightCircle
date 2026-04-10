@@ -1,0 +1,6 @@
+project_id    = "creator-d4m-2026-1774038056"
+artifact_repo = "insight-repo"
+zone          = "us-central1-a"
+bucket        = "insight-whisper-transcripts-1774038056"
+region        = "us-central1"
+pubsub_subscription = "whisper-process-sub"

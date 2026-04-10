@@ -48,9 +48,19 @@
               "icon": "lucide-file",
               "title": "YT-DLP Attributes"
             }
+          },
+          {
+            "id": "95e9b01659823c3a",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
+            }
           }
         ],
-        "currentTab": 2
+        "currentTab": 3
       }
     ],
     "direction": "vertical"
@@ -212,9 +222,16 @@
       "bases:Create new base": false
     }
   },
-  "active": "42104af0a053e08e",
+  "active": "95e9b01659823c3a",
   "lastOpenFiles": [
+    "Commands.md",
     "Untitled.md",
+    "terraform_impl.md",
+    "Clippings/The \"Multi-Platform\" Strategic Analysis.md",
+    "Clippings/Strategic Value Proposition.md",
+    "Action Cards.md",
+    "Clippings/List the sites offering yt analytics..md",
+    "Clippings/RSA Oauth.md",
     "Ingest -- add table name arg.md",
     "ingest.md",
     "Clippings/YT-DLP Attributes.md",

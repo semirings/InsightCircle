@@ -19,6 +19,7 @@ target/
 .idea/
 .vscode/
 *.log
+.obsidian/workspace.json
 
 # Misc
 .env
