@@ -13,3 +13,7 @@ DROP TABLE IF EXISTS creator-d4m-2026-1774038056.insight_metadata.yt_metadata`;
 *Turns out a table can be deleted from the browser.*
 
 bq rm -f -t creator-d4m-2026-1774038056:insight_metadata.yt_metadata
+
+**gcloud pubsub topics publish whisper-input \**
+  **--message='{"video_id": "vOfmh16ZLIM"}' \**
+  **--project=creator-d4m-2026-1774038056

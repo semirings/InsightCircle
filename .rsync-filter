@@ -31,6 +31,7 @@
 - /.julia/
 - /venv/
 - /node_modules/
+- .terraform/
 # - .env*
 
 # --- IGNORE SCRIPTS & DOCS ---

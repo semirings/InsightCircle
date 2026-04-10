@@ -10,9 +10,8 @@ provider "google" {
 }
 
 locals {
-  image                       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-whisper:${var.image_tag}"
-  whisper_completion_topic    = "projects/${var.project_id}/topics/whisper-completion"
-  whisper_input_subscription  = "projects/${var.project_id}/subscriptions/whisper-input-sub"
+  image                    = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-whisper:${var.image_tag}"
+  whisper_completion_topic = "projects/${var.project_id}/topics/whisper-completion"
 }
 
 resource "google_service_account" "insight_whisper" {
@@ -50,6 +49,22 @@ resource "google_pubsub_subscription" "whisper_input_sub" {
 
   # Transcription can take up to 15 min; use the maximum supported deadline
   ack_deadline_seconds = 600
+
+  push_config {
+    push_endpoint = "${google_cloud_run_v2_service.insight_whisper.uri}/pubsub/whisper-input"
+
+    oidc_token {
+      service_account_email = google_service_account.insight_whisper.email
+    }
+  }
+}
+
+resource "google_cloud_run_v2_service_iam_member" "pubsub_invoker" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.insight_whisper.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.insight_whisper.email}"
 }
 
 # ── Pub/Sub: whisper-completion topic ─────────────────────────────────────────
@@ -62,44 +77,37 @@ resource "google_pubsub_topic" "whisper_completion" {
 
 resource "google_cloud_run_v2_service" "insight_whisper" {
   name     = "insight-whisper"
-  location = var.region
+  location = "us-central1"
 
   template {
-    service_account = google_service_account.insight_whisper.email
-
     containers {
-      image = local.image
+      image = "us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-whisper:latest"
 
-      ports {
-        container_port = 8080
-      }
-
-      env {
-        name  = "WHISPER_MODEL"
-        value = var.whisper_model
-      }
-
-      env {
-        name  = "WHISPER_COMPLETION_TOPIC"
-        value = local.whisper_completion_topic
-      }
-
+      # This is the fix for the KeyError
       env {
         name  = "WHISPER_INPUT_SUBSCRIPTION"
-        value = local.whisper_input_subscription
+        value = "projects/creator-d4m-2026-1774038056/subscriptions/whisper-input-sub"
       }
 
+      # Your code likely needs these next
+      env {
+        name  = "WHISPER_COMPLETION_TOPIC"
+        value = "projects/creator-d4m-2026-1774038056/topics/whisper-completion"
+      }
+
+      env {
+        name  = "GCP_PROJECT_ID"
+        value = "creator-d4m-2026-1774038056"
+      }
+      
+      # Recommended: Set memory to at least 2Gi for Whisper
       resources {
         limits = {
-          cpu    = "4"
-          memory = "4Gi"
+          cpu    = "2"
+          memory = "2Gi"
         }
-        startup_cpu_boost = true
       }
     }
-
-    # Transcription can be slow — allow up to 15 min
-    timeout = "900s"
   }
 }
 

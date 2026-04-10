@@ -9,11 +9,6 @@ provider "google" {
   region  = var.region
 }
 
-locals {
-  image                              = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-store:${var.image_tag}"
-  whisper_completion_subscription_id = "projects/${var.project_id}/subscriptions/whisper-completion-sub"
-}
-
 resource "google_service_account" "insight_store" {
   account_id   = "insight-store-sa"
   display_name = "InsightStore Service Account"
@@ -60,44 +55,4 @@ resource "google_bigquery_table" "whisper_completion" {
     { name = "output_path", type = "STRING",    mode = "REQUIRED", description = "Path within the bucket to the transcription output file" },
     { name = "timestamp",   type = "TIMESTAMP", mode = "REQUIRED", description = "ISO 8601 timestamp of when the result was recorded" },
   ])
-}
-
-# ── Cloud Run ─────────────────────────────────────────────────────────────────
-
-resource "google_cloud_run_v2_service" "insight_store" {
-  name     = "insight-store"
-  location = var.region
-
-  template {
-    service_account = google_service_account.insight_store.email
-
-    containers {
-      image = local.image
-
-      ports {
-        container_port = 5203
-      }
-
-      env {
-        name  = "PYTHONUNBUFFERED"
-        value = "1"
-      }
-
-      env {
-        name  = "WHISPER_COMPLETION_SUBSCRIPTION"
-        value = local.whisper_completion_subscription_id
-      }
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-      }
-    }
-  }
-}
-
-output "insight_store_url" {
-  value = google_cloud_run_v2_service.insight_store.uri
 }

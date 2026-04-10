@@ -9,16 +9,16 @@ Subscribes to whisper_input events.  For each event:
 Also exposes POST /transcribe?video_id=<id> for direct invocation.
 """
 
+import base64
 import json
 import logging
 import os
 import tempfile
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import whisper
 import yt_dlp
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +28,6 @@ _BUCKET_NAME              = "insightcircle_bucket"
 _NARRATIVE_PFX            = "narrative"
 _WHISPER_MODEL            = os.getenv("WHISPER_MODEL", "base")
 _WHISPER_COMPLETION_TOPIC = os.environ["WHISPER_COMPLETION_TOPIC"]
-_WHISPER_INPUT_SUBSCRIPTION = os.environ["WHISPER_INPUT_SUBSCRIPTION"]
 
 _model          = None
 _storage_client = None
@@ -87,7 +86,9 @@ def _run_transcription(video_id: str) -> dict:
             }],
             "quiet": True,
             "no_warnings": True,
+            "cookiefile": "/app/cookies.txt"
         }
+
 
         log.info("Downloading audio for video_id=%s", video_id)
         try:
@@ -124,49 +125,40 @@ def _run_transcription(video_id: str) -> dict:
     }
 
 
-# ── Pub/Sub callback ──────────────────────────────────────────────────────────
+# ── App ───────────────────────────────────────────────────────────────────────
 
-def _handle_whisper_input(message: pubsub_v1.subscriber.message.Message) -> None:
-    """Transcribe the video referenced in a whisper_input event, then ack."""
+app = FastAPI(title="InsightWhisper", version="0.1.0")
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/", summary="Health check")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/pubsub/whisper-input", summary="Receive a Pub/Sub push notification for whisper-input")
+async def pubsub_whisper_input(request: Request) -> dict:
+    """Handle a Pub/Sub push envelope, transcribe the referenced video."""
+    envelope = await request.json()
     try:
-        payload  = json.loads(message.data.decode("utf-8"))
+        data     = base64.b64decode(envelope["message"]["data"])
+        payload  = json.loads(data)
         video_id = payload["video_id"]
     except Exception as exc:
-        log.error("Malformed whisper_input message: %s", exc)
-        message.nack()
-        return
+        log.error("Malformed Pub/Sub push message: %s", exc)
+        raise HTTPException(status_code=400, detail="Malformed message") from exc
 
     try:
         _run_transcription(video_id)
         _publish_completion(video_id, "completed", f"{_NARRATIVE_PFX}/{video_id}")
-        message.ack()
-    except Exception as exc:
+    except RuntimeError as exc:
         log.exception("Transcription failed for video_id=%s: %s", video_id, exc)
         _publish_completion(video_id, "failed", "")
-        message.nack()
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    return {"status": "ok", "video_id": video_id}
 
-# ── Lifespan: start/stop the subscriber ──────────────────────────────────────
-
-@asynccontextmanager
-async def _lifespan(_: FastAPI):
-    subscriber = pubsub_v1.SubscriberClient()
-    future = subscriber.subscribe(_WHISPER_INPUT_SUBSCRIPTION, callback=_handle_whisper_input)
-    log.info("PubSub subscriber started on %s", _WHISPER_INPUT_SUBSCRIPTION)
-    try:
-        yield
-    finally:
-        future.cancel()
-        future.result(timeout=5)
-        log.info("PubSub subscriber stopped")
-
-
-# ── App ───────────────────────────────────────────────────────────────────────
-
-app = FastAPI(title="InsightWhisper", version="0.1.0", lifespan=_lifespan)
-
-
-# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.post("/transcribe", summary="Transcribe a YouTube video and store the transcript in GCS")
 def transcribe(video_id: str) -> dict:

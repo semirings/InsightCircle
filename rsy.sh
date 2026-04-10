@@ -26,4 +26,4 @@ rsync -avzP \
   "${REMOTE}:~/populi.Wk/InsightCircle/" \
   ~/populi.Wk/InsightCircle/
 
-ssh "${REMOTE}" "bash ~/populi.Wk/InsightCircle/insight_calc/ctl.sh"
+ssh "${REMOTE}" "bash ~/populi.Wk/InsightCircle/ctl.sh"
