@@ -29,6 +29,39 @@ end
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+"""
+    queryVideo(d4mQuery::String) -> InsightPayload
+
+Query yt_metadata for a single video using a D4M query string
+(e.g. `"vid123:"`) and return an InsightPayload.
+
+d4m_score  = (likes + comments) / views  (engagement rate; 0 if views == 0)
+is_high_value = d4m_score ≥ 0.05
+gcs_uri    = gs://{GCS_VIDEO_BUCKET}/{video_id}.mp4
+anchors    = [] (populated downstream when timestamp data is available)
+"""
+function queryVideo(d4mQuery::String)::InsightPayload
+    aa = queryYtMetadata(d4mQuery)
+
+    rows, cols, vals = find(aa)
+    isempty(rows) && error("queryVideo: no results for D4M query \"$d4mQuery\"")
+
+    video_id = first(rows)
+    fields   = Dict(zip(cols, vals))
+
+    views    = parse(Float64, get(fields, "views",    "0"))
+    likes    = parse(Float64, get(fields, "likes",    "0"))
+    comments = parse(Float64, get(fields, "comments", "0"))
+
+    d4m_score     = views > 0 ? (likes + comments) / views : 0.0
+    is_high_value = d4m_score >= 0.05
+
+    bucket  = get(ENV, "GCS_VIDEO_BUCKET", "")
+    gcs_uri = isempty(bucket) ? "" : "gs://$bucket/$video_id.mp4"
+
+    return InsightPayload(video_id, gcs_uri, d4m_score, Float64[], is_high_value)
+end
+
 function analyseSegments(segments)::Dict
     @debug "[analyseSegments] begin" nSegments=length(segments)
     # TODO: convert segments to Assoc and run D4M operations, e.g.:

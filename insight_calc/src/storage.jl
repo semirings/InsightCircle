@@ -273,11 +273,15 @@ function _rowsToAssocEAV(rows, fieldNames::Vector{String}, rowKeyCol::String;
             push!(colKeys, isnothing(cells[colIdx].v) ? "" : String(cells[colIdx].v))
             push!(vals,    isnothing(cells[valIdx].v) ? "" : String(cells[valIdx].v))
         else
-            # EAV: one triple per cell
+            # EAV: one triple per cell, skip the row key column and null/empty values
             for (col, cell) in zip(fieldNames, cells)
+                col == rowKeyCol && continue
+                isnothing(cell.v) && continue
+                v = String(cell.v)
+                isempty(v) && continue
                 push!(rowKeys, rowKey)
                 push!(colKeys, col)
-                push!(vals,    isnothing(cell.v) ? "" : String(cell.v))
+                push!(vals,    v)
             end
         end
         @debug "[_rowsToAssocEAV]" rowKey

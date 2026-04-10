@@ -1,0 +1,6 @@
+project_id          = "creator-d4m-2026-1774038056"
+region              = "us-central1"
+zone                = "us-central1-a"
+bucket              = "insightcircle_bucket"
+pubsub_subscription = "aa-ingest-sub"
+artifact_repo       = "insightcircle"

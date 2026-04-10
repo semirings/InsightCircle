@@ -16,8 +16,9 @@ include("storage.jl")
 include("automata.jl")
 include("algebra.jl")
 include("services.jl")
+include("pubsub.jl")
 
-export startServer, stopServer, bqToMap, BQChunk, scan, BQResult, BQParam, toApiParams
+export startServer, stopServer, bqToMap, BQChunk, scan, BQResult, BQParam, toApiParams, queryYtMetadata, aa2df, InsightPayload, publish, queryVideo
 
 # ── Global state ──────────────────────────────────────────────────────────────
 

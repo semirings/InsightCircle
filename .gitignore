@@ -1,26 +1,96 @@
-# Python
-venv/
-__pycache__/
-*.pyc
-*.pyo
-
-# Flutter / Dart
+# ----------------------------------------------------------------------------
+# COMPILER / BUILD OUTPUT
+# ----------------------------------------------------------------------------
+bin/
 build/
-.flutter-plugins
+obj/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ----------------------------------------------------------------------------
+# FLUTTER / DART
+# ----------------------------------------------------------------------------
 .dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.packages
+pubspec.lock
+# Optional: Uncomment if you want each dev to resolve their own version
+# !pubspec.lock 
 
-# Java
-*.class
-*.jar
-target/
+# ----------------------------------------------------------------------------
+# APPLE (iOS / macOS) - Mac Studio Specifics
+# ----------------------------------------------------------------------------
+# Ignore internal CocoaPods and Xcode state
+ios/Pods/
+macos/Pods/
+.symlinks/
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.lsany
+*.moved-aside
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+**/*.pbxuser
+**/*.perspectivev3
+**/*.mode1v3
 
-# IDE / OS
-*.DS_Store
-.idea/
-.vscode/
+# ----------------------------------------------------------------------------
+# PYTHON & JULIA (IC Layer)
+# ----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+ENV/
+.venv/
+
+# Julia build artifacts
+*.jl.cov
+*.jl.mem
+
+# ----------------------------------------------------------------------------
+# DATA & SAMPLES (Prevent 2,500+ record bloat)
+# ----------------------------------------------------------------------------
+*.jsonl
+*.csv
+*.mp4
+*.m4a
 *.log
 .obsidian/workspace.json
+# Explicitly ignore your current pilot file
+consortium_pilot.jsonl
 
-# Misc
+# ----------------------------------------------------------------------------
+# SECRETS & CLOUD CONFIG (Virginia LLC Security)
+# ----------------------------------------------------------------------------
 .env
-.gradle/
+.env.*
+# Firebase/GCP Service Account Keys
+*-key.json
+google-services.json
+GoogleService-Info.plist
+*.keystore
+*.jks
+
+# ----------------------------------------------------------------------------
+# IDE & OS
+# ----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+.terraform/
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
