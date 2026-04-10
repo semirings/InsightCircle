@@ -1,17 +1,20 @@
 """InsightToken – FastAPI CaaS.
 
-POST /tokenize?video_id=<id>
-
-  1. Reads gs://insightcircle_bucket/narrative/<video_id>.txt
+Subscribes to whisper_completion events.  For each completed event:
+  1. Reads gs://insightcircle_bucket/narrative/<video_id>
   2. Tokenizes the text with spaCy.
-  3. Writes token list (one per line) to gs://insightcircle_bucket/tokens/<video_id>.txt
+  3. Writes token list (one per line) to gs://insightcircle_bucket/tokens/<video_id>
+
+Also exposes POST /tokenize?video_id=<id> for direct invocation.
 """
 
+import base64
+import json
 import logging
 import os
 
 import spacy
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from google.cloud import storage
 
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +25,7 @@ _IN_PREFIX    = "narrative"
 _OUT_PREFIX   = "tokens"
 _SPACY_MODEL  = os.getenv("SPACY_MODEL", "en_core_web_sm")
 
-app = FastAPI(title="InsightToken", version="0.1.0")
+app = FastAPI(title="InsightToken", version="0.2.0")
 
 _nlp            = None
 _storage_client = None
@@ -43,12 +46,44 @@ def _get_storage() -> storage.Client:
     return _storage_client
 
 
-@app.post("/tokenize", summary="Tokenize a narrative transcript stored in GCS")
-def tokenize(video_id: str) -> dict:
-    bucket = _get_storage().bucket(_BUCKET_NAME)
+@app.get("/", summary="Health check")
+def health() -> dict:
+    return {"status": "ok"}
+
+
+@app.post("/pubsub/whisper-completion", summary="Receive a Pub/Sub push notification for whisper-completion")
+async def pubsub_whisper_completion(request: Request) -> dict:
+    """Handle a Pub/Sub push envelope; tokenize the completed transcript."""
+    envelope = await request.json()
+    try:
+        data     = base64.b64decode(envelope["message"]["data"])
+        payload  = json.loads(data)
+        video_id = payload["video_id"]
+        status   = payload["status"]
+    except Exception as exc:
+        log.error("Malformed Pub/Sub push message: %s", exc)
+        raise HTTPException(status_code=400, detail="Malformed message") from exc
+
+    if status != "completed":
+        log.info("Skipping video_id=%s with status=%s", video_id, status)
+        return {"status": "skipped", "video_id": video_id}
+
+    try:
+        result = _tokenize(video_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"status": "ok", **result}
+
+
+def _tokenize(video_id: str) -> dict:
+    bucket  = _get_storage().bucket(_BUCKET_NAME)
+    in_path = f"{_IN_PREFIX}/{video_id}"
+    out_path = f"{_OUT_PREFIX}/{video_id}"
 
     # ── Read ────────────────────────────────────────────────────────────────
-    in_path = f"{_IN_PREFIX}/{video_id}.txt"
     blob_in = bucket.blob(in_path)
     if not blob_in.exists():
         raise HTTPException(status_code=404, detail=f"gs://{_BUCKET_NAME}/{in_path} not found.")
@@ -65,7 +100,6 @@ def tokenize(video_id: str) -> dict:
     tokens = [token.text for token in doc if not token.is_space]
 
     # ── Write ───────────────────────────────────────────────────────────────
-    out_path = f"{_OUT_PREFIX}/{video_id}.txt"
     log.info("Writing %d tokens to gs://%s/%s", len(tokens), _BUCKET_NAME, out_path)
     try:
         bucket.blob(out_path).upload_from_string(
@@ -80,3 +114,8 @@ def tokenize(video_id: str) -> dict:
         "gcs_in":      f"gs://{_BUCKET_NAME}/{in_path}",
         "gcs_out":     f"gs://{_BUCKET_NAME}/{out_path}",
     }
+
+
+@app.post("/tokenize", summary="Tokenize a narrative transcript stored in GCS")
+def tokenize(video_id: str) -> dict:
+    return _tokenize(video_id)
