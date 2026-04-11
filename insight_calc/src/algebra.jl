@@ -2,7 +2,28 @@
 # No BQ I/O, no HTTP.
 
 using D4M
+using DataFrames
 using Logging
+
+# ── Assoc ↔ DataFrame ────────────────────────────────────────────────────────
+
+"""
+    aa2df(aa::Assoc) -> DataFrame
+
+Convert an Assoc to a wide DataFrame. Rows are the unique row keys of the
+Assoc; columns are the unique col keys; values are the cell values (empty
+string where no entry exists).
+"""
+function aa2df(aa::Assoc)::DataFrame
+    rows, cols, vals = find(aa)
+    all_rows = unique(rows)
+    all_cols = unique(cols)
+    lookup   = Dict(zip(zip(rows, cols), vals))
+    return DataFrame(
+        "row" => all_rows,
+        [c => [get(lookup, (r, c), "") for r in all_rows] for c in all_cols]...
+    )
+end
 
 # ── Assoc construction ────────────────────────────────────────────────────────
 
@@ -62,11 +83,3 @@ function queryVideo(d4mQuery::String)::InsightPayload
     return InsightPayload(video_id, gcs_uri, d4m_score, Float64[], is_high_value)
 end
 
-function analyseSegments(segments)::Dict
-    @debug "[analyseSegments] begin" nSegments=length(segments)
-    # TODO: convert segments to Assoc and run D4M operations, e.g.:
-    #   A      = Assoc(row_keys, col_keys, values)
-    #   colsum = sum(A, 1)
-    @warn "[analyseSegments] stub — no D4M computation performed"
-    return Dict("segment_count" => length(segments), "status" => "stub")
-end

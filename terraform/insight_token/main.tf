@@ -12,6 +12,7 @@ provider "google" {
 locals {
   image                    = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-token:${var.image_tag}"
   whisper_completion_topic = "projects/${var.project_id}/topics/whisper-completion"
+  token_completion_topic   = "projects/${var.project_id}/topics/token-completion"
 }
 
 resource "google_service_account" "insight_token" {
@@ -29,6 +30,16 @@ resource "google_project_iam_member" "token_pubsub_subscriber" {
   project = var.project_id
   role    = "roles/pubsub.subscriber"
   member  = "serviceAccount:${google_service_account.insight_token.email}"
+}
+
+resource "google_project_iam_member" "token_pubsub_publisher" {
+  project = var.project_id
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.insight_token.email}"
+}
+
+resource "google_pubsub_topic" "token_completion" {
+  name = "token-completion"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "pubsub_invoker" {
@@ -73,6 +84,11 @@ resource "google_cloud_run_v2_service" "insight_token" {
       env {
         name  = "SPACY_MODEL"
         value = var.spacy_model
+      }
+
+      env {
+        name  = "TOKEN_COMPLETION_TOPIC"
+        value = local.token_completion_topic
       }
 
       resources {

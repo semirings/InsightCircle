@@ -12,23 +12,26 @@ import base64
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import spacy
 from fastapi import FastAPI, HTTPException, Request
-from google.cloud import storage
+from google.cloud import pubsub_v1, storage
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-_BUCKET_NAME  = "insightcircle_bucket"
-_IN_PREFIX    = "narrative"
-_OUT_PREFIX   = "tokens"
-_SPACY_MODEL  = os.getenv("SPACY_MODEL", "en_core_web_sm")
+_BUCKET_NAME             = "insightcircle_bucket"
+_IN_PREFIX               = "narrative"
+_OUT_PREFIX              = "tokens"
+_SPACY_MODEL             = os.getenv("SPACY_MODEL", "en_core_web_sm")
+_TOKEN_COMPLETION_TOPIC  = os.environ["TOKEN_COMPLETION_TOPIC"]
 
-app = FastAPI(title="InsightToken", version="0.2.0")
+app = FastAPI(title="InsightToken", version="0.3.0")
 
 _nlp            = None
 _storage_client = None
+_publisher      = None
 
 
 def _get_nlp() -> spacy.language.Language:
@@ -44,6 +47,27 @@ def _get_storage() -> storage.Client:
     if _storage_client is None:
         _storage_client = storage.Client()
     return _storage_client
+
+
+def _get_publisher() -> pubsub_v1.PublisherClient:
+    global _publisher
+    if _publisher is None:
+        _publisher = pubsub_v1.PublisherClient()
+    return _publisher
+
+
+def _publish_completion(video_id: str, status: str, token_count: int, gcs_out: str) -> None:
+    payload = {
+        "video_id":    video_id,
+        "status":      status,
+        "token_count": token_count,
+        "gcs_out":     gcs_out,
+        "timestamp":   datetime.now(timezone.utc).isoformat(),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    future = _get_publisher().publish(_TOKEN_COMPLETION_TOPIC, data)
+    msg_id = future.result()
+    log.info("Published token_completion event (status=%s, msg_id=%s)", status, msg_id)
 
 
 @app.get("/", summary="Health check")
@@ -71,10 +95,13 @@ async def pubsub_whisper_completion(request: Request) -> dict:
     try:
         result = _tokenize(video_id)
     except HTTPException:
+        _publish_completion(video_id, "failed", 0, "")
         raise
     except Exception as exc:
+        _publish_completion(video_id, "failed", 0, "")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    _publish_completion(video_id, "completed", result["token_count"], result["gcs_out"])
     return {"status": "ok", **result}
 
 

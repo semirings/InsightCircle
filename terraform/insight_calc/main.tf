@@ -9,20 +9,27 @@ provider "google" {
   region  = var.region
 }
 
+locals {
+  image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-calc:${var.image_tag}"
+}
+
+# ── Service account ───────────────────────────────────────────────────────────
+
 resource "google_service_account" "insight_calc" {
   account_id   = "insight-calc-sa"
   display_name = "InsightCalc Service Account"
 }
 
-resource "google_project_iam_member" "calc_gcs" {
+# BQ read-only + ability to run query jobs
+resource "google_project_iam_member" "calc_bq_viewer" {
   project = var.project_id
-  role    = "roles/storage.objectAdmin"
+  role    = "roles/bigquery.dataViewer"
   member  = "serviceAccount:${google_service_account.insight_calc.email}"
 }
 
-resource "google_project_iam_member" "calc_bq" {
+resource "google_project_iam_member" "calc_bq_job_user" {
   project = var.project_id
-  role    = "roles/bigquery.dataEditor"
+  role    = "roles/bigquery.jobUser"
   member  = "serviceAccount:${google_service_account.insight_calc.email}"
 }
 
@@ -32,46 +39,57 @@ resource "google_project_iam_member" "calc_pubsub_pub" {
   member  = "serviceAccount:${google_service_account.insight_calc.email}"
 }
 
-resource "google_compute_instance" "insight_dev_node" {
-  name         = "insight-dev-node"
-  machine_type = var.machine_type
-  zone         = var.zone
-
-  boot_disk {
-    initialize_params {
-      image = "ubuntu-os-cloud/ubuntu-2204-lts"
-      size  = 50
-    }
-  }
-
-  network_interface {
-    network = "default"
-    access_config {}   # ephemeral public IP
-  }
-
-  service_account {
-    email  = google_service_account.insight_calc.email
-    scopes = ["cloud-platform"]
-  }
-
-  metadata_startup_script = <<-EOT
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    # Install juliaup
-    curl -fsSL https://install.julialang.org | sh -s -- -y
-    export PATH="$HOME/.juliaup/bin:$PATH"
-
-    # Clone repo and start service
-    mkdir -p /home/gcr/populi.Wk/InsightCircle
-    systemctl daemon-reload
-    systemctl enable insight-calc
-    systemctl start insight-calc
-  EOT
-
-  tags = ["insight-calc"]
+# Allow Cloud Run Jobs to be executed under this SA
+resource "google_project_iam_member" "calc_run_invoker" {
+  project = var.project_id
+  role    = "roles/run.invoker"
+  member  = "serviceAccount:${google_service_account.insight_calc.email}"
 }
 
-output "insight_calc_ip" {
-  value = google_compute_instance.insight_dev_node.network_interface[0].access_config[0].nat_ip
+# ── Cloud Run Service (ad-hoc queries) ───────────────────────────────────────
+
+resource "google_cloud_run_v2_service" "insight_calc" {
+  name     = "insight-calc"
+  location = var.region
+
+  template {
+    service_account = google_service_account.insight_calc.email
+
+    containers {
+      image = local.image
+
+      ports {
+        container_port = 8080
+      }
+
+      env {
+        name  = "BQ_PROJECT"
+        value = var.project_id
+      }
+
+      env {
+        name  = "BQ_DATASET"
+        value = var.bq_dataset
+      }
+
+      resources {
+        limits = {
+          cpu    = "2"
+          memory = "2Gi"
+        }
+      }
+    }
+
+    # Keep one warm instance to avoid Julia cold-start on ad-hoc queries
+    scaling {
+      min_instance_count = 1
+      max_instance_count = 3
+    }
+  }
+}
+
+# ── Outputs ───────────────────────────────────────────────────────────────────
+
+output "insight_calc_url" {
+  value = google_cloud_run_v2_service.insight_calc.uri
 }

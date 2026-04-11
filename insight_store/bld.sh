@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-token:latest"
+IMAGE="us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-store:latest"
 
 echo "── Building $IMAGE"
 docker build --platform linux/amd64 -t "$IMAGE" .
@@ -10,10 +10,9 @@ echo "── Pushing $IMAGE"
 docker push "$IMAGE"
 
 echo "── Deploying to Cloud Run"
-gcloud run deploy insight-token \
+gcloud run deploy insight-store \
   --image "$IMAGE" \
   --region us-central1 \
-  --project creator-d4m-2026-1774038056 \
-  --set-env-vars TOKEN_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/token-completion
+  --project creator-d4m-2026-1774038056
 
 echo "── Done"

@@ -16,11 +16,13 @@ struct BQServer
 end
 
 struct BQTable
-    server  :: BQServer
-    name    :: String
-    dataset :: String
+    server      :: BQServer
+    name        :: String
+    dataset     :: String
+    row_key_col :: String        # column treated as the Assoc row key
 end
-BQTable(srv::BQServer, name::String) = BQTable(srv, name, srv.dataset)
+BQTable(srv::BQServer, name::String) = BQTable(srv, name, srv.dataset, "id")
+BQTable(srv::BQServer, name::String, row_key_col::String) = BQTable(srv, name, srv.dataset, row_key_col)
 
 # ── Module-level singletons ───────────────────────────────────────────────────
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, "../.."))
@@ -33,8 +35,12 @@ const _SERVER = Ref{Union{Nothing, BQServer}}(nothing)
 
 function dbSetup(projectId::String, dataset::String)::BQServer
     keyPath = get(ENV, "GOOGLE_APPLICATION_CREDENTIALS", "")
-    isempty(keyPath) && error("Set GOOGLE_APPLICATION_CREDENTIALS environment variable")
-    creds   = GoogleCloud.JSONCredentials(keyPath)
+    creds = if isempty(keyPath)
+        @info "No GOOGLE_APPLICATION_CREDENTIALS set; using metadata server (Cloud Run ADC)"
+        GoogleCloud.MetadataCredentials()
+    else
+        GoogleCloud.JSONCredentials(keyPath)
+    end
     session = GoogleCloud.GoogleSession(creds, ["https://www.googleapis.com/auth/bigquery"])
     return BQServer(projectId, dataset, session)
 end
@@ -87,6 +93,44 @@ function _authHeaders(session::GoogleCloud.GoogleSession)
     return ["Authorization" => "Bearer $token", "Content-Type" => "application/json"]
 end
 
+# ── BQTable getindex — D4M-style table access ────────────────────────────────
+#
+# Usage (mirrors D4M HAZoo syntax):
+#   T = BQTable(getServer(), "yt_metadata", "id")
+#   T["vid123,vid456:", ":"]          # two specific rows, all cols
+#   T[":", "views,likes,"]            # all rows, two cols
+#   T["a..z:", ":"]                   # row range
+#   T["deep*", ":"]                   # prefix match on rows
+#
+# Row filter → pushed down to BQ SQL (efficient).
+# Col filter → applied in-memory on the returned Assoc (EAV cols are field names).
+
+function Base.getindex(t::BQTable, row_query::String, col_query::String)::Assoc
+    srv = t.server
+    bqr = generateBqParams(_parse(row_query * col_query))
+
+    row_filter = replace(bqr.row_clause, "row_key" => t.row_key_col)
+
+    sql = """
+        SELECT *
+        FROM `$(srv.project).$(t.dataset).$(t.name)`
+        WHERE $row_filter
+    """
+
+    jobId   = _submitJob(srv.session, srv.project, sql;
+                         queryParameters=toApiParams(bqr.params))
+    url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId?maxResults=10000&location=us-central1"
+    payload = JSON3.read(HTTP.get(url, _authHeaders(srv.session)).body)
+    aa      = rowsToAssoc(payload, t.row_key_col)
+
+    # Apply col filter in-memory unless it is the wildcard
+    col_query == ":" && return aa
+    return applyD4mMath(_parse(":" * col_query), aa)
+end
+
+# Convenience: T["vid123:"] — row only, all cols
+Base.getindex(t::BQTable, row_query::String) = t[row_query, ":"]
+
 # ── Table operations ──────────────────────────────────────────────────────────
 
 function listTables()::Vector{String}
@@ -101,42 +145,6 @@ function listTables()::Vector{String}
     return [String(t.tableReference.tableId) for t in tables]
 end
 
-function createMetadataTable(tableName::String)::Bool
-    srv  = getServer()
-    url  = "$_BQ_BASE/projects/$(srv.project)/datasets/$(srv.dataset)/tables"
-    body = JSON3.write(Dict(
-        "tableReference" => Dict(
-            "projectId" => srv.project,
-            "datasetId" => srv.dataset,
-            "tableId"   => tableName,
-        )
-    ))
-    try
-        HTTP.post(url, _authHeaders(srv.session), body)
-        @info "Table created" tableName
-        return true
-    catch e
-        @error "createMetadataTable failed" tableName e
-        return false
-    end
-end
-
-function insertVideoMetadata(tableName::String, videoData::Dict)::Bool
-    srv = getServer()
-    url = "$_BQ_BASE/projects/$(srv.project)/datasets/$(srv.dataset)/tables/$tableName/insertAll"
-    row = Dict{String,Any}("id" => videoData["id"])
-    for (k, v) in get(videoData, "snippet", Dict())
-        row["meta_$k"] = string(v)
-    end
-    body = JSON3.write(Dict("rows" => [Dict("json" => row)]))
-    try
-        HTTP.post(url, _authHeaders(srv.session), body)
-        return true
-    catch e
-        @error "insertVideoMetadata failed" tableName e
-        return false
-    end
-end
 
 # ── Paginated streaming: bqToMap / BQChunk ────────────────────────────────────
 
@@ -289,4 +297,76 @@ function _rowsToAssocEAV(rows, fieldNames::Vector{String}, rowKeyCol::String;
 
     isempty(rowKeys) && return Assoc(String[], String[], String[])
     return Assoc(rowKeys, colKeys, vals)
+end
+
+# ── yt_metadata query ─────────────────────────────────────────────────────────
+
+"""
+    queryYtMetadata(d4mQuery; chunkSize=10_000) -> Assoc
+
+Parse a D4M query string and return an incidence Assoc over yt_metadata.
+Rows = video id, cols = field/query_term, vals = cell value or "1".
+
+Examples:
+    queryYtMetadata(":")                 # all videos
+    queryYtMetadata("vid123,vid456:")    # two specific videos
+    queryYtMetadata(":deep learning")   # one query term
+"""
+function queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc
+    r          = scan(d4mQuery, BigQueryTarget)
+    row_filter = replace(r.row_clause, "row_key" => "id")
+    col_filter = replace(r.col_clause, "col_key" => "qt")
+    srv        = getServer()
+
+    # 1. Scalar fields (EAV)
+    sql_scalar = """
+        SELECT id, title,
+               CAST(views AS STRING)       AS views,
+               CAST(likes AS STRING)       AS likes,
+               CAST(comments AS STRING)    AS comments,
+               CAST(duration AS STRING)    AS duration,
+               upload_date, uploader,
+               CAST(subscribers AS STRING) AS subscribers,
+               category
+        FROM `$(srv.project).$(srv.dataset).yt_metadata`
+        WHERE $row_filter
+    """
+    jobId   = _submitJob(srv.session, srv.project, sql_scalar;
+                         queryParameters=toApiParams(r.params))
+    url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId?maxResults=$chunkSize&location=us-central1"
+    payload = JSON3.read(HTTP.get(url, _authHeaders(srv.session)).body)
+    scalar_aa = rowsToAssoc(payload, "id")
+
+    # 2. query_term: subscripted col names (query_term_1, query_term_2, ...)
+    sql_terms = """
+        SELECT id,
+               CONCAT('query_term_',
+                      CAST(ROW_NUMBER() OVER (PARTITION BY id ORDER BY qt) AS STRING)) AS term_col,
+               qt AS term_val
+        FROM `$(srv.project).$(srv.dataset).yt_metadata`,
+        UNNEST(query_term) AS qt
+        WHERE $row_filter AND $col_filter
+    """
+    jobId2   = _submitJob(srv.session, srv.project, sql_terms;
+                          queryParameters=toApiParams(r.params))
+    url2     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId2?maxResults=$chunkSize&location=us-central1"
+    payload2 = JSON3.read(HTTP.get(url2, _authHeaders(srv.session)).body)
+
+    term_rows = String[]
+    term_cols = String[]
+    term_vals = String[]
+    for row in payload2.rows
+        any(isnothing(row.f[k].v) for k in 1:3) && continue
+        id_v   = String(row.f[1].v)
+        col_v  = String(row.f[2].v)
+        val_v  = String(row.f[3].v)
+        (isempty(id_v) || isempty(col_v) || isempty(val_v)) && continue
+        push!(term_rows, id_v)
+        push!(term_cols, col_v)
+        push!(term_vals, val_v)
+    end
+
+    r1, c1, v1 = find(scalar_aa)
+    isempty(r1) && isempty(term_rows) && return Assoc(String[], String[], String[])
+    return Assoc(vcat(r1, term_rows), vcat(c1, term_cols), vcat(v1, term_vals))
 end
