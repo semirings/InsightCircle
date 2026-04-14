@@ -5,8 +5,9 @@ Endpoints:
   GET  /metadata/tables   – list BQ tables in the insight_metadata dataset
 
 Push subscriptions:
-  POST /pubsub/whisper-completion – store whisper_completion events in BQ
-  POST /pubsub/token-completion   – store token_completion events in BQ
+  POST /pubsub/whisper-completion   – store whisper_completion events in BQ
+  POST /pubsub/token-completion     – store token_completion events in BQ
+  POST /pubsub/ontology-completion  – store ontology_completion events in BQ
 
 Background pull:
   aa-ingest-sub – writes incoming AA payloads to the BQ table named in each message.
@@ -15,8 +16,8 @@ Background pull:
 import base64
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import bigquery, pubsub_v1, storage
@@ -38,35 +39,55 @@ _storage_client = storage.Client()
 
 # ── PubSub pull callback ──────────────────────────────────────────────────────
 
+_AA_TABLES = {"tokens", "ontology", "ontology_gpc"}
+
+
 def _handle_aa(message: pubsub_v1.subscriber.message.Message) -> None:
-    """Write an AA payload to its target BQ table, then ack."""
+    """Write rcvs AA triples to the target BQ table, then ack.
+
+    Expected message format (rcvs.json):
+      { "table_name": "tokens|ontology|ontology_gpc",
+        "video_id":   "...",
+        "rows":       [...],
+        "cols":       [...],
+        "vals":       [...] }
+    """
     try:
-        envelope = json.loads(message.data.decode("utf-8"))
+        envelope   = json.loads(message.data.decode("utf-8"))
+        table_name = envelope["table_name"]
+        video_id   = envelope["video_id"]
+        rows       = envelope["rows"]
+        cols       = envelope["cols"]
+        vals       = envelope["vals"]
+        timestamp  = datetime.now(timezone.utc).isoformat()
 
-        table_name  = envelope["table_name"]
-        payload     = envelope["payload"]
-        video_id    = payload["video_id"]
-        ingested_at = payload["ingested_at"]
-        ontology_aa = payload["ontology_aa"]
+        if table_name not in _AA_TABLES:
+            log.warning("Unknown AA table '%s' — skipping", table_name)
+            message.ack()
+            return
 
-        table_ref = f"{_BQ_DATASET}.{table_name}"
-        row = {
-            "video_id":    video_id,
-            "ingested_at": ingested_at,
-            "ontology_aa": json.dumps(ontology_aa),
-        }
+        if not rows:
+            log.info("Empty AA for table=%s video_id=%s — skipping", table_name, video_id)
+            message.ack()
+            return
 
-        errors = _bq_client.insert_rows_json(table_ref, [row])
+        bq_rows = [
+            {"video_id": video_id, "row": r, "col": c, "val": v, "timestamp": timestamp}
+            for r, c, v in zip(rows, cols, vals)
+        ]
+
+        errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.{table_name}", bq_rows)
         if errors:
-            log.error("BQ insert errors for table %s: %s", table_name, errors)
+            log.error("BQ insert errors for table=%s: %s", table_name, errors)
             message.nack()
             return
 
-        log.info("Stored AA for video_id=%s in %s", video_id, table_ref)
+        log.info("Stored %d triples in %s.%s for video_id=%s",
+                 len(bq_rows), _BQ_DATASET, table_name, video_id)
         message.ack()
 
     except Exception as exc:
-        log.exception("Failed to process AA PubSub message: %s", exc)
+        log.exception("Failed to process AA message: %s", exc)
         message.nack()
 
 
@@ -149,6 +170,34 @@ async def pubsub_token_completion(request: Request) -> dict:
         raise HTTPException(status_code=500, detail=str(errors))
 
     log.info("Stored token_completion for video_id=%s (status=%s)", video_id, payload["status"])
+    return {"status": "ok", "video_id": video_id}
+
+
+@app.post("/pubsub/ontology-completion", summary="Receive ontology_completion event and store in BQ")
+async def pubsub_ontology_completion(request: Request) -> dict:
+    envelope = await request.json()
+    try:
+        data     = base64.b64decode(envelope["message"]["data"])
+        payload  = json.loads(data)
+        video_id = payload["video_id"]
+    except Exception as exc:
+        log.error("Malformed Pub/Sub push message: %s", exc)
+        raise HTTPException(status_code=400, detail="Malformed message") from exc
+
+    row = {
+        "video_id":    payload["video_id"],
+        "status":      payload["status"],
+        "node_count":  payload.get("node_count"),
+        "rel_count":   payload.get("rel_count"),
+        "output_path": payload.get("output_path", ""),
+        "timestamp":   payload["timestamp"],
+    }
+    errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.ontology_completion", [row])
+    if errors:
+        log.error("BQ insert errors for ontology_completion: %s", errors)
+        raise HTTPException(status_code=500, detail=str(errors))
+
+    log.info("Stored ontology_completion for video_id=%s (status=%s)", video_id, payload["status"])
     return {"status": "ok", "video_id": video_id}
 
 

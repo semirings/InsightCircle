@@ -26,6 +26,7 @@ _IN_PREFIX               = "narrative"
 _OUT_PREFIX              = "tokens"
 _SPACY_MODEL             = os.getenv("SPACY_MODEL", "en_core_web_sm")
 _TOKEN_COMPLETION_TOPIC  = os.environ["TOKEN_COMPLETION_TOPIC"]
+_AA_INGEST_TOPIC         = os.environ["AA_INGEST_TOPIC"]
 
 app = FastAPI(title="InsightToken", version="0.3.0")
 
@@ -54,6 +55,20 @@ def _get_publisher() -> pubsub_v1.PublisherClient:
     if _publisher is None:
         _publisher = pubsub_v1.PublisherClient()
     return _publisher
+
+
+def _publish_aa(video_id: str, tokens: list[str]) -> None:
+    payload = {
+        "table_name": "tokens",
+        "video_id":   video_id,
+        "rows":       [video_id] * len(tokens),
+        "cols":       tokens,
+        "vals":       ["1"]      * len(tokens),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    future = _get_publisher().publish(_AA_INGEST_TOPIC, data)
+    msg_id = future.result()
+    log.info("Published tokens AA video_id=%s count=%d msg_id=%s", video_id, len(tokens), msg_id)
 
 
 def _publish_completion(video_id: str, status: str, token_count: int, gcs_out: str) -> None:
@@ -125,6 +140,9 @@ def _tokenize(video_id: str) -> dict:
     log.info("Tokenizing %d chars for video_id=%s", len(text), video_id)
     doc    = _get_nlp()(text)
     tokens = [token.text for token in doc if not token.is_space]
+
+    # ── Publish AA ──────────────────────────────────────────────────────────
+    _publish_aa(video_id, tokens)
 
     # ── Write ───────────────────────────────────────────────────────────────
     log.info("Writing %d tokens to gs://%s/%s", len(tokens), _BUCKET_NAME, out_path)

@@ -72,14 +72,15 @@ EOF
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 usage() {
-    echo "Usage: $(basename "$0") <option>"
-    echo "  -up   start  insight-dev-node"
-    echo "  -dn   stop   insight-dev-node"
-    echo "  -st   status insight-dev-node"
+    echo "Usage: $(basename "$0") <option> [tier]"
+    echo "  -up [tier]  start  insight-dev-node"
+    echo "              tier: (none)=e2-standard-4, 2=t2d-standard-4, 4=n2-standard-4"
+    echo "  -dn         stop   insight-dev-node"
+    echo "  -st         status insight-dev-node"
     exit 1
 }
 
-[[ $# -eq 1 ]] || usage
+[[ $# -ge 1 ]] || usage
 
 case "$1" in
     -up) cmd="start"    ;;
@@ -88,17 +89,66 @@ case "$1" in
     *)   usage          ;;
 esac
 
-gcloud compute instances "$cmd" insight-dev-node --zone=us-central1-a
+case "${2:-}" in
+    "")  machine_type="e2-standard-4"  ;;
+    2)   machine_type="t2d-standard-4" ;;
+    4)   machine_type="n2-standard-4"  ;;
+    *)   echo "Unknown tier '${2}'. Use: (none), 2, or 4."; exit 1 ;;
+esac
 
-if [[ "$cmd" == "start" ]]; then
-    external_ip=$(gcloud compute instances describe insight-dev-node \
-        --zone=us-central1-a \
-        --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
-    echo "External IP: $external_ip"
+case "$cmd" in
+    start)
+        max_tries=10
+        try=0
+        while true; do
+            try=$(( try + 1 ))
+            echo "Attempt $try of $max_tries..."
 
-    hosts_template "$external_ip" | sudo tee /etc/hosts > /dev/null
-    echo "Replaced /etc/hosts: insight -> $external_ip"
+            gcloud compute instances set-machine-type insight-dev-node \
+                --machine-type="$machine_type" \
+                --zone=us-central1-a
 
-    ssh_template "$external_ip" > ~/.ssh/config
-    echo "Replaced ~/.ssh/config: insight -> $external_ip"
-fi
+            if gcloud compute instances start insight-dev-node \
+                    --zone=us-central1-a; then
+
+                echo "Waiting for RUNNING state..."
+                while [[ "$(gcloud compute instances describe insight-dev-node \
+                            --zone=us-central1-a \
+                            --format='get(status)')" != "RUNNING" ]]; do
+                    sleep 2
+                done
+
+                external_ip=$(gcloud compute instances describe insight-dev-node \
+                    --zone=us-central1-a \
+                    --format="get(networkInterfaces[0].accessConfigs[0].natIP)")
+                echo "External IP: $external_ip"
+
+                hosts_template "$external_ip" | sudo tee /etc/hosts > /dev/null
+                echo "Replaced /etc/hosts: insight -> $external_ip"
+
+                ssh_template "$external_ip" > ~/.ssh/config
+                echo "Replaced ~/.ssh/config: insight -> $external_ip"
+                break
+            fi
+
+            if (( try >= max_tries )); then
+                echo "Failed after $max_tries attempts. Giving up."
+                exit 1
+            fi
+
+            echo "Still exhausted at $(date). Retrying in 2 minutes..."
+            sleep 120
+        done
+        ;;
+
+    stop)
+        gcloud compute instances stop insight-dev-node \
+            --zone=us-central1-a
+        echo "insight-dev-node stopped."
+        ;;
+
+    describe)
+        gcloud compute instances describe insight-dev-node \
+            --zone=us-central1-a
+        ;;
+esac

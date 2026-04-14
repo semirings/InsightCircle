@@ -74,7 +74,57 @@ resource "google_pubsub_subscription" "store_token_completion_sub" {
   }
 }
 
-# ── BigQuery tables ───────────────────────────────────────────────────────────
+# ── Pub/Sub: ontology-completion push subscription ───────────────────────────
+
+resource "google_pubsub_subscription" "store_ontology_completion_sub" {
+  name  = "store-ontology-completion-sub"
+  topic = "projects/${var.project_id}/topics/ontology-completion"
+
+  ack_deadline_seconds = 60
+
+  push_config {
+    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/ontology-completion"
+
+    oidc_token {
+      service_account_email = google_service_account.insight_store.email
+    }
+  }
+}
+
+# ── BigQuery AA tables (rcvs triple format) ──────────────────────────────────
+
+locals {
+  aa_table_schema = jsonencode([
+    { name = "video_id",  type = "STRING",    mode = "REQUIRED", description = "Video identifier (anchor)" },
+    { name = "row",       type = "STRING",    mode = "REQUIRED", description = "Assoc row key" },
+    { name = "col",       type = "STRING",    mode = "REQUIRED", description = "Assoc column key" },
+    { name = "val",       type = "STRING",    mode = "REQUIRED", description = "Assoc value" },
+    { name = "timestamp", type = "TIMESTAMP", mode = "REQUIRED", description = "Ingestion timestamp" },
+  ])
+}
+
+resource "google_bigquery_table" "tokens" {
+  dataset_id          = "insight_metadata"
+  table_id            = "tokens"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_gpc" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_gpc"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+# ── BigQuery completion event tables ─────────────────────────────────────────
 
 resource "google_bigquery_table" "token_completion" {
   dataset_id          = "insight_metadata"

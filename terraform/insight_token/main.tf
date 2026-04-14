@@ -91,6 +91,11 @@ resource "google_cloud_run_v2_service" "insight_token" {
         value = local.token_completion_topic
       }
 
+      env {
+        name  = "AA_INGEST_TOPIC"
+        value = "projects/${var.project_id}/topics/aa-ingest"
+      }
+
       resources {
         limits = {
           cpu    = "2"

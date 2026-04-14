@@ -14,6 +14,6 @@ gcloud run deploy insight-token \
   --image "$IMAGE" \
   --region us-central1 \
   --project creator-d4m-2026-1774038056 \
-  --set-env-vars TOKEN_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/token-completion
+  --set-env-vars TOKEN_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/token-completion,AA_INGEST_TOPIC=projects/creator-d4m-2026-1774038056/topics/aa-ingest
 
 echo "── Done"
