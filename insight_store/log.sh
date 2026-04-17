@@ -2,7 +2,7 @@
 set -euo pipefail
 
 gcloud logging read \
-  'resource.type="cloud_run_revision" AND resource.labels.service_name="insight-whisper"' \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="insight-store"' \
   --limit "${1:-50}" \
   --freshness "${2:-30m}" \
   --format 'value(timestamp, textPayload)' \

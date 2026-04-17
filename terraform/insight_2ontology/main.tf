@@ -52,6 +52,12 @@ resource "google_pubsub_topic" "ontology_completion" {
   name = "ontology-completion"
 }
 
+# ── Pub/Sub: aa-ingest topic ─────────────────────────────────────────────────
+
+resource "google_pubsub_topic" "aa_ingest" {
+  name = "aa-ingest"
+}
+
 # ── Pub/Sub: whisper-completion push subscription ────────────────────────────
 
 resource "google_cloud_run_v2_service_iam_member" "pubsub_invoker" {
@@ -63,7 +69,7 @@ resource "google_cloud_run_v2_service_iam_member" "pubsub_invoker" {
 }
 
 resource "google_pubsub_subscription" "whisper_completion_sub" {
-  name  = "2ontology-whisper-completion-sub"
+  name  = "i2-whisper-completion-sub"
   topic = local.whisper_completion_topic
 
   ack_deadline_seconds = 300  # LLM calls can be slow

@@ -5,4 +5,4 @@ google-cloud-pubsub>=2.21.0
 langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-experimental>=0.3.0
-langchain-google-vertexai>=2.0.0
+langchain-google-genai>=2.0.0

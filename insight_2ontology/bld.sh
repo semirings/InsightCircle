@@ -19,7 +19,10 @@ gcloud run deploy insight-2ontology \
   --image "$IMAGE" \
   --region us-central1 \
   --project creator-d4m-2026-1774038056 \
-  --set-env-vars ONTOLOGY_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/ontology-completion,GCP_PROJECT=creator-d4m-2026-1774038056,AA_INGEST_TOPIC=projects/creator-d4m-2026-1774038056/topics/aa-ingest \
-  --clear-secrets
+  --memory 2Gi \
+  --cpu 2 \
+  --timeout 300 \
+  --set-env-vars ONTOLOGY_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/ontology-completion,GCP_PROJECT=creator-d4m-2026-1774038056,AA_INGEST_TOPIC=projects/creator-d4m-2026-1774038056/topics/aa-ingest,LLM_MODEL=gemini-2.5-flash \
+  --set-secrets GOOGLE_API_KEY=google-api-key:latest
 
 echo "── Done"

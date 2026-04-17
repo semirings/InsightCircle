@@ -9,5 +9,5 @@ variable "image_tag" {
 
 variable "llm_model" {
   type    = string
-  default = "gemini-1.5-flash"
+  default = "gemini-2.5-flash"
 }

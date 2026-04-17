@@ -5,7 +5,7 @@ REMOTE=insight-dev-node.us-central1-a.creator-d4m-2026-1774038056
 
 # Note: Removed --delete to prevent accidental notebook wiping
 # Added --filter='P *.ipynb' to explicitly protect remote notebooks
-rsync -avzP \
+rsync -avzP --no-perms --no-times \
   --rsync-path="mkdir -p ~/populi.Wk/InsightCircle && rsync" \
   --filter='P *.ipynb' \
   --exclude-from='.rsync-filter' \
