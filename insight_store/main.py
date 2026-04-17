@@ -216,6 +216,30 @@ def list_ingest_files() -> list[str]:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@app.get("/debug/aa-sub", summary="Peek at pending aa-ingest-sub messages without acking")
+async def debug_aa_sub(max_messages: int = 5) -> dict:
+    """Synchronous pull from aa-ingest-sub — shows what's waiting, does NOT ack."""
+    from google.cloud import pubsub_v1  # already imported at top but scoped here for clarity
+    subscriber = pubsub_v1.SubscriberClient()
+    response = subscriber.pull(
+        request={"subscription": _SUBSCRIPTION, "max_messages": max_messages}
+    )
+    messages = []
+    for msg in response.received_messages:
+        try:
+            parsed = json.loads(msg.message.data.decode("utf-8"))
+        except Exception:
+            parsed = {"raw": msg.message.data.decode("utf-8", errors="replace")}
+        messages.append({
+            "ack_id":     msg.ack_id[:20] + "…",
+            "message_id": msg.message.message_id,
+            "table_name": parsed.get("table_name"),
+            "video_id":   parsed.get("video_id"),
+            "triples":    len(parsed.get("rows", [])),
+        })
+    return {"subscription": _SUBSCRIPTION, "pending": len(messages), "messages": messages}
+
+
 @app.get("/metadata/tables", response_model=list[str], summary="List BQ tables in insight_metadata")
 async def list_insight_tables() -> list[str]:
     """Return the table IDs in the insight_metadata BigQuery dataset."""

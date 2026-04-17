@@ -91,6 +91,16 @@ resource "google_pubsub_subscription" "store_ontology_completion_sub" {
   }
 }
 
+# ── Pub/Sub: aa-ingest pull subscription ─────────────────────────────────────
+
+resource "google_pubsub_subscription" "aa_ingest_sub" {
+  name  = "aa-ingest-sub"
+  topic = "projects/${var.project_id}/topics/aa-ingest"
+
+  ack_deadline_seconds       = 60
+  message_retention_duration = "604800s"  # 7 days
+}
+
 # ── BigQuery AA tables (rcvs triple format) ──────────────────────────────────
 
 locals {
