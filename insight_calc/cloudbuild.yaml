@@ -1,0 +1,18 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - InsightCircle/insight_calc/Dockerfile
+      - -t
+      - us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-calc:latest
+      - .
+
+images:
+  - us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-calc:latest
+
+timeout: 7200s
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 100

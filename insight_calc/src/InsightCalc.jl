@@ -45,6 +45,12 @@ end
     return json(Dict("rows" => rows, "cols" => cols, "vals" => vals))
 end
 
-Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")))
+function main()
+    Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")))
+end
+
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
 
 end # module InsightCalc

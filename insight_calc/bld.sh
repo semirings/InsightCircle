@@ -5,14 +5,10 @@ IMAGE="us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insig
 CONTEXT="$(cd "$(dirname "$0")/../.." && pwd)"  # populi.Wk/
 
 echo "── Build context: $CONTEXT"
-echo "── Building $IMAGE"
-docker build --platform linux/amd64 \
-  -f "$(dirname "$0")/Dockerfile" \
-  -t "$IMAGE" \
-  "$CONTEXT"
-
-echo "── Pushing $IMAGE"
-docker push "$IMAGE"
+echo "── Building $IMAGE via Cloud Build (native linux/amd64)"
+gcloud builds submit "$CONTEXT" \
+  --project creator-d4m-2026-1774038056 \
+  --config "$(dirname "$0")/cloudbuild.yaml"
 
 echo "── Deploying to Cloud Run"
 gcloud run deploy insight-calc \

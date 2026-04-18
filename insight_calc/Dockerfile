@@ -11,7 +11,7 @@ COPY D4M.jl /D4M.jl
 # Pkg.instantiate installs deps and precompiles them; InsightCalc itself is
 # skipped here because src/ is not present yet.
 COPY InsightCircle/insight_calc/Project.toml InsightCircle/insight_calc/Manifest.toml ./
-RUN julia --project=. -e "using Pkg; Pkg.instantiate()"
+RUN JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=. -e "using Pkg; Pkg.instantiate()"
 
 # ── Layer: compile InsightCalc ────────────────────────────────────────────────
 # Only this layer re-runs on source changes. Deps are already compiled above.
