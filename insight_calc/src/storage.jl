@@ -7,12 +7,40 @@ using HTTP
 using JSON3
 using Logging
 
+# ── Auth abstraction ─────────────────────────────────────────────────────────
+#
+# GoogleCloud.jl v0.11.0 MetadataCredentials uses HTTP.get(url, headers=h)
+# where `headers` is a positional arg in HTTP.jl v1.x, so the keyword form
+# silently drops into kwargs and the Metadata-Flavor header is never sent,
+# causing a 403 / CredentialError. Bypass it entirely for Cloud Run: fetch
+# the token directly from the well-known metadata endpoint.
+
+struct CloudRunSession end   # marker — no fields, no GoogleCloud dependency
+
+const BQSession = Union{CloudRunSession, GoogleCloud.GoogleSession}
+
+const _TOKEN_CACHE = Ref{Tuple{String, Float64}}(("", 0.0))
+
+function _fetchMetadataToken()::String
+    tok, exp = _TOKEN_CACHE[]
+    time() < exp && return tok
+    resp = HTTP.get(
+        "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+        ["Metadata-Flavor" => "Google"],
+    )
+    data = JSON3.read(resp.body)
+    tok  = String(data.access_token)
+    exp  = time() + Float64(get(data, :expires_in, 3600)) - 60.0
+    _TOKEN_CACHE[] = (tok, exp)
+    return tok
+end
+
 # ── Connection types ──────────────────────────────────────────────────────────
 
 struct BQServer
     project :: String
     dataset :: String
-    session :: GoogleCloud.GoogleSession
+    session :: BQSession
 end
 
 struct BQTable
@@ -26,41 +54,31 @@ BQTable(srv::BQServer, name::String, row_key_col::String) = BQTable(srv, name, s
 
 # ── Module-level singletons ───────────────────────────────────────────────────
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, "../.."))
-const ENV_PATH = joinpath(PROJECT_ROOT, ".env")            
-@info "ENV_PATH==$ENV_PATH"
-const BQ_PROJECT = get(ENV, "BQ_PROJECT", "")
-const BQ_DATASET = get(ENV, "BQ_DATASET", "insight_metadata")
 
 const _SERVER = Ref{Union{Nothing, BQServer}}(nothing)
 
 function dbSetup(projectId::String, dataset::String)::BQServer
     keyPath = get(ENV, "GOOGLE_APPLICATION_CREDENTIALS", "")
-    creds = if isempty(keyPath)
-        @info "No GOOGLE_APPLICATION_CREDENTIALS set; using metadata server (Cloud Run ADC)"
-        GoogleCloud.MetadataCredentials()
+    session = if isempty(keyPath)
+        @info "No GOOGLE_APPLICATION_CREDENTIALS set; using Cloud Run metadata server"
+        CloudRunSession()
     else
-        GoogleCloud.JSONCredentials(keyPath)
+        creds = GoogleCloud.JSONCredentials(keyPath)
+        GoogleCloud.GoogleSession(creds, ["https://www.googleapis.com/auth/bigquery"])
     end
-    session = GoogleCloud.GoogleSession(creds, ["https://www.googleapis.com/auth/bigquery"])
     return BQServer(projectId, dataset, session)
 end
 
 function getServer()::BQServer
     if isnothing(_SERVER[])
+        bq_project = get(ENV, "BQ_PROJECT", "")
+        bq_dataset = get(ENV, "BQ_DATASET", "insight_metadata")
 
-        if isfile(ENV_PATH)
-            DotEnv.load!(ENV_PATH)
-        else
-            @warn ".env not found at $ENV_PATH. Using system ENV."
+        if isempty(bq_project)
+            error("BQ_PROJECT environment variable is not set")
         end
-        
-        if isempty(BQ_PROJECT)
-            @error "Environment variables missing" path=pwd()
-            error("Set BQ_PROJECT in .env")
-        end
-        
-        # Initialize the actual connection object
-        _SERVER[] = dbSetup(BQ_PROJECT, BQ_DATASET)
+
+        _SERVER[] = dbSetup(bq_project, bq_dataset)
     end
     return _SERVER[]
 end
@@ -69,27 +87,17 @@ end
 
 const _BQ_BASE = "https://bigquery.googleapis.com/bigquery/v2"
 
-function _authHeaders(session::GoogleCloud.GoogleSession)
-    # 1. FORCE AUTHORIZATION: If the dict is empty, trigger a refresh
-    if isempty(session.authorization)
-        @info "Session is unauthorized. Fetching new token..."
-        GoogleCloud.authorize(session)
+function _authHeaders(session::BQSession)
+    token = if session isa CloudRunSession
+        _fetchMetadataToken()
+    else
+        isempty(session.authorization) && GoogleCloud.authorize(session)
+        auth_dict = session.authorization
+        tok = get(auth_dict, :token, get(auth_dict, :access_token, ""))
+        tok == "" && (tok = get(auth_dict, "access_token", ""))
+        tok == "" && error("No token in authorization dict. Keys: $(keys(auth_dict))")
+        tok
     end
-
-    auth_dict = session.authorization
-    
-    # 2. Extract the token (usually :token or :access_token)
-    token = get(auth_dict, :token, get(auth_dict, :access_token, ""))
-    
-    if token == ""
-        # Last-ditch: maybe it's a string key?
-        token = get(auth_dict, "access_token", "")
-    end
-
-    if token == ""
-        error("Authorization succeeded but no token was returned. Keys: $(keys(auth_dict))")
-    end
-    
     return ["Authorization" => "Bearer $token", "Content-Type" => "application/json"]
 end
 
@@ -158,7 +166,7 @@ struct BQChunk
     pageToken :: Union{String, Nothing}
     chunkSize :: Int
     projectId :: String
-    session   :: GoogleCloud.GoogleSession
+    session   :: BQSession
 end
 
 Base.getindex(chunk::BQChunk, i, j) = chunk.assoc[i, j]
@@ -187,7 +195,7 @@ function bqToMap(sqlClause::String; queryParameters::Vector=[], chunkSize::Int =
     return _fetchPage(srv.session, srv.project, jobId, nothing, chunkSize)
 end
 
-function _submitJob(session::GoogleCloud.GoogleSession, projectId::String,
+function _submitJob(session::BQSession, projectId::String,
                     sqlClause::String; queryParameters::Vector=[])::String
     url  = "$_BQ_BASE/projects/$projectId/jobs"
     query_config = Dict{String,Any}(
@@ -211,7 +219,7 @@ function _submitJob(session::GoogleCloud.GoogleSession, projectId::String,
     return jobId
 end
 
-function _waitForJob(session::GoogleCloud.GoogleSession, projectId::String,
+function _waitForJob(session::BQSession, projectId::String,
                      jobId::String)
     url = "$_BQ_BASE/projects/$projectId/jobs/$jobId?location=us-central1"
     while true
@@ -222,7 +230,7 @@ function _waitForJob(session::GoogleCloud.GoogleSession, projectId::String,
     end
 end
 
-function _fetchPage(session::GoogleCloud.GoogleSession, projectId::String,
+function _fetchPage(session::BQSession, projectId::String,
                     jobId::String, pageToken::Union{String,Nothing},
                     chunkSize::Int)::BQChunk
     url = "$_BQ_BASE/projects/$projectId/queries/$jobId?maxResults=$chunkSize&location=us-central1"

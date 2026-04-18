@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DEPLOY_ONLY=false
+for arg in "$@"; do
+  [[ "$arg" == "--deploy-only" ]] && DEPLOY_ONLY=true
+done
+
 IMAGE="us-central1-docker.pkg.dev/creator-d4m-2026-1774038056/insight-repo/insight-calc:latest"
 CONTEXT="$(cd "$(dirname "$0")/../.." && pwd)"  # populi.Wk/
 
-echo "── Build context: $CONTEXT"
-echo "── Building $IMAGE via Cloud Build (native linux/amd64)"
-gcloud builds submit "$CONTEXT" \
-  --project creator-d4m-2026-1774038056 \
-  --config "$(dirname "$0")/cloudbuild.yaml"
+if [[ "$DEPLOY_ONLY" == false ]]; then
+  echo "── Build context: $CONTEXT"
+  echo "── Building $IMAGE via Cloud Build (native linux/amd64)"
+  gcloud builds submit "$CONTEXT" \
+    --project creator-d4m-2026-1774038056 \
+    --config "$(dirname "$0")/cloudbuild.yaml"
+fi
 
 echo "── Deploying to Cloud Run"
 gcloud run deploy insight-calc \
@@ -19,6 +26,9 @@ gcloud run deploy insight-calc \
   --cpu 2 \
   --min-instances 1 \
   --max-instances 3 \
+  --allow-unauthenticated \
+  --cpu-boost \
+  --startup-probe=httpGet.path=/health,failureThreshold=3,periodSeconds=240 \
   --set-env-vars BQ_PROJECT=creator-d4m-2026-1774038056,BQ_DATASET=insight_metadata,PUBSUB_TOPIC=insight-calc-results
 
 echo "── Done"

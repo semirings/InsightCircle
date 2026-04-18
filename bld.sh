@@ -26,18 +26,25 @@ declare -A SERVICE_DIR=(
 
 ORDERED=(I2 IC IS IT IW)
 
-if [[ $# -gt 0 ]]; then
-  TARGETS=("$@")
-else
-  TARGETS=("${ORDERED[@]}")
-fi
+TARGETS=()
+FLAGS=()
+for arg in "$@"; do
+  if [[ -v "SERVICE_DIR[$arg]" ]]; then
+    TARGETS+=("$arg")
+  elif [[ $# -eq 0 ]]; then
+    :
+  else
+    FLAGS+=("$arg")
+  fi
+done
+[[ ${#TARGETS[@]} -eq 0 ]] && TARGETS=("${ORDERED[@]}")
 
 for key in "${TARGETS[@]}"; do
   dir="${SERVICE_DIR[$key]:?Unknown service key: $key}"
   echo "════════════════════════════════════════"
   echo "  $key  →  $dir"
   echo "════════════════════════════════════════"
-  bash "$dir/bld.sh"
+  bash "$dir/bld.sh" "${FLAGS[@]+"${FLAGS[@]}"}"
   echo
 done
 

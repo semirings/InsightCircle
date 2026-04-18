@@ -13,10 +13,12 @@ COPY D4M.jl /D4M.jl
 COPY InsightCircle/insight_calc/Project.toml InsightCircle/insight_calc/Manifest.toml ./
 RUN JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=. -e "using Pkg; Pkg.instantiate()"
 
-# ── Layer: compile InsightCalc ────────────────────────────────────────────────
-# Only this layer re-runs on source changes. Deps are already compiled above.
+# ── Layer: precompile heavy deps only (no InsightCalc source yet) ─────────────
+# Cached until Project.toml/Manifest.toml change. Source changes skip this layer.
+RUN julia --project=. -e "using D4M, DataFrames, HTTP, Oxygen, GoogleCloud, JSON3, Automa, DotEnv, Dates, Logging"
+
+# ── Layer: copy source (invalidates only the final layer on code changes) ─────
 COPY InsightCircle/insight_calc/src/ ./src/
-RUN julia --project=. -e "using Pkg; Pkg.precompile()"
 
 ENV PORT=8080
 
