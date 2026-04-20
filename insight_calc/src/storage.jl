@@ -308,32 +308,150 @@ function _rowsToAssocEAV(rows, fieldNames::Vector{String}, rowKeyCol::String;
     return Assoc(rowKeys, colKeys, vals)
 end
 
-# ── yt_metadata query ─────────────────────────────────────────────────────────
+# ── Generic paginated fetch (any row key) ────────────────────────────────────
+
+function _fetchPageGeneric(session::BQSession, projectId::String,
+                           jobId::String, pageToken::Union{String,Nothing},
+                           chunkSize::Int, rowKeyCol::String)::Tuple{Assoc, Union{String,Nothing}}
+    url = "$_BQ_BASE/projects/$projectId/queries/$jobId?maxResults=$chunkSize&location=us-central1"
+    isnothing(pageToken) || (url *= "&pageToken=$pageToken")
+    payload   = JSON3.read(HTTP.get(url, _authHeaders(session)).body)
+    nextToken = let t = get(payload, :pageToken, nothing)
+        isnothing(t) ? nothing : String(t)
+    end
+    return (rowsToAssoc(payload, rowKeyCol), nextToken)
+end
 
 """
-    queryYtMetadata(d4mQuery; chunkSize=10_000) -> Assoc
+    queryTableChunk(tableName, d4mQuery; rowKeyCol, chunkSize) -> (Assoc, jobId, pageToken)
 
-Parse a D4M query string and return an incidence Assoc over yt_metadata.
-Rows = video id, cols = field/query_term, vals = cell value or "1".
-
-Examples:
-    queryYtMetadata(":")                 # all videos
-    queryYtMetadata("vid123,vid456:")    # two specific videos
-    queryYtMetadata(":deep learning")   # one query term
+Like `queryTable` but returns pagination state so callers can fetch subsequent pages
+via `_fetchPageGeneric(session, project, jobId, pageToken, chunkSize, rowKeyCol)`.
+`pageToken` is `nothing` when the result fits in a single page.
 """
-function queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc
+function queryTableChunk(tableName::String, d4mQuery::String;
+                         rowKeyCol::String="id", chunkSize::Int=10_000)::Tuple{Assoc, String, Union{String,Nothing}}
+    occursin(r"^[A-Za-z0-9_]+$", tableName) ||
+        error("Invalid table name '$tableName': only alphanumeric and underscore allowed")
     r          = scan(d4mQuery, BigQueryTarget)
-    row_filter = replace(r.row_clause, "row_key" => "id")
+    row_filter = replace(r.row_clause, "row_key" => rowKeyCol)
+    srv        = getServer()
+    sql = """
+        SELECT *
+        FROM `$(srv.project).$(srv.dataset).$tableName`
+        WHERE $row_filter
+    """
+    jobId          = _submitJob(srv.session, srv.project, sql; queryParameters=toApiParams(r.params))
+    aa, nextToken  = _fetchPageGeneric(srv.session, srv.project, jobId, nothing, chunkSize, rowKeyCol)
+    return (aa, jobId, nextToken)
+end
+
+# ── Generic D4M table query ───────────────────────────────────────────────────
+
+"""
+    queryTable(tableName, d4mQuery; rowKeyCol="id", chunkSize=10_000) -> Assoc
+
+Run a D4M query against any table in the dataset.
+- tableName: must be alphanumeric + underscores (validated before use in SQL)
+- d4mQuery:  D4M query string (":" = all rows, "vid123:" = one row, etc.)
+- rowKeyCol: column used as the Assoc row key (default "id")
+
+Returns an EAV Assoc; array-typed columns are silently skipped.
+"""
+function queryTable(tableName::String, d4mQuery::String;
+                    rowKeyCol::String="id", chunkSize::Int=10_000)::Assoc
+    occursin(r"^[A-Za-z0-9_]+$", tableName) ||
+        error("Invalid table name '$tableName': only alphanumeric and underscore allowed")
+
+    r          = scan(d4mQuery, BigQueryTarget)
+    row_filter = replace(r.row_clause, "row_key" => rowKeyCol)
     srv        = getServer()
 
     sql = """
         SELECT *
-        FROM `$(srv.project).$(srv.dataset).yt_metadata`
+        FROM `$(srv.project).$(srv.dataset).$tableName`
         WHERE $row_filter
     """
     jobId   = _submitJob(srv.session, srv.project, sql;
                          queryParameters=toApiParams(r.params))
     url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId?maxResults=$chunkSize&location=us-central1"
     payload = JSON3.read(HTTP.get(url, _authHeaders(srv.session)).body)
-    return rowsToAssoc(payload, "id")
+    return rowsToAssoc(payload, rowKeyCol)
+end
+
+# ── yt_metadata convenience wrapper ──────────────────────────────────────────
+
+queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc =
+    queryTable("yt_metadata", d4mQuery; chunkSize=chunkSize)
+
+# ── ICTable — BQ-aware cursor, D4M-style getindex ────────────────────────────
+#
+# Usage:
+#   T = getTable("ontology_gpc"; row_key="row")
+#   A = T[":"]           # submit BQ job, return first chunk Assoc, arm cursor
+#   A = T["XYZ*"]        # new query — resets cursor, returns first chunk
+#   T[]                  # next chunk (nothing when exhausted)
+#
+# Returned chunks are plain Assoc — further D4M ops are local, do not affect T:
+#   E  = T[":"]
+#   EE = E[":StartsWith(\"XYZ\")"]   # local D4M, T unchanged
+
+mutable struct ICTable
+    table      :: String
+    row_key    :: String
+    chunk_size :: Int
+    job_id     :: Union{String, Nothing}
+    page_token :: Union{String, Nothing}
+end
+
+"""
+    getTable(table; row_key="id", chunk_size=10_000) -> ICTable
+
+Create a BQ-aware cursor for `table`. No query is issued until `T[query]` is called.
+"""
+function getTable(table::String; row_key::String="id", chunk_size::Int=10_000)::ICTable
+    occursin(r"^[A-Za-z0-9_]+$", table) ||
+        error("Invalid table name '$table': only alphanumeric and underscore allowed")
+    ICTable(table, row_key, chunk_size, nothing, nothing)
+end
+
+"""
+    T[row_query] -> Assoc
+
+Submit a BQ job for `row_query` against T's table, return the first chunk,
+and arm T's cursor for subsequent `T[]` calls.
+A new call to `T[query]` resets the cursor with a fresh query.
+"""
+function Base.getindex(t::ICTable, row_query::String)::Assoc
+    srv        = getServer()
+    r          = scan(row_query, BigQueryTarget)
+    row_filter = replace(r.row_clause, "row_key" => t.row_key)
+    sql = """
+        SELECT *
+        FROM `$(srv.project).$(srv.dataset).$(t.table)`
+        WHERE $row_filter
+    """
+    jobId         = _submitJob(srv.session, srv.project, sql;
+                               queryParameters=toApiParams(r.params))
+    aa, nextToken = _fetchPageGeneric(srv.session, srv.project, jobId, nothing,
+                                      t.chunk_size, t.row_key)
+    t.job_id      = jobId
+    t.page_token  = nextToken
+    return aa
+end
+
+"""
+    T[] -> Union{Assoc, Nothing}
+
+Fetch the next chunk from T's active cursor.
+Returns `nothing` when all pages have been consumed.
+"""
+function Base.getindex(t::ICTable)::Union{Assoc, Nothing}
+    isnothing(t.job_id)     && error("No active query on T; call T[query] first")
+    isnothing(t.page_token) && return nothing
+    srv           = getServer()
+    aa, nextToken = _fetchPageGeneric(srv.session, srv.project, t.job_id,
+                                      t.page_token, t.chunk_size, t.row_key)
+    t.page_token  = nextToken
+    return aa
 end

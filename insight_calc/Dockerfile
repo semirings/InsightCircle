@@ -17,8 +17,11 @@ RUN JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=. -e "using Pkg; Pkg.instantiate
 # Cached until Project.toml/Manifest.toml change. Source changes skip this layer.
 RUN julia --project=. -e "using D4M, DataFrames, HTTP, Oxygen, GoogleCloud, JSON3, Automa, DotEnv, Dates, Logging"
 
-# ── Layer: copy source (invalidates only the final layer on code changes) ─────
+# ── Layer: copy source and precompile InsightCalc ─────────────────────────────
+# Cached until src/ changes. Precompiling here means cold-start is a cache
+# load (~1-2 s) instead of a full JIT compilation (~5-10 min).
 COPY InsightCircle/insight_calc/src/ ./src/
+RUN julia --project=. -e "using Pkg; Pkg.precompile()"
 
 ENV PORT=8080
 

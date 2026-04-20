@@ -17,7 +17,7 @@ include("automata.jl")
 include("algebra.jl")
 include("pubsub.jl")
 
-export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, aa2df, InsightPayload, publish, queryVideo
+export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, InsightPayload, publish, queryVideo
 
 const START_TIME = Ref{DateTime}(now())
 
@@ -43,6 +43,35 @@ end
     aa     = queryYtMetadata(string(body.query))
     rows, cols, vals = find(aa)
     return json(Dict("rows" => rows, "cols" => cols, "vals" => vals))
+end
+
+@post "/query" function(req::HTTP.Request)
+    body = JSON3.read(req.body)
+    haskey(body, :table) || return json(Dict("error" => "missing table"), status=400)
+    haskey(body, :query) || return json(Dict("error" => "missing query"), status=400)
+    tableName = string(body.table)
+    d4mQuery  = string(body.query)
+    rowKeyCol = haskey(body, :row_key)    ? string(body.row_key)           : "id"
+    chunkSize = haskey(body, :chunk_size) ? Int(body.chunk_size)           : 10_000
+    aa, jobId, pageToken = queryTableChunk(tableName, d4mQuery; rowKeyCol, chunkSize)
+    rows, cols, vals = find(aa)
+    return json(Dict("rows" => rows, "cols" => cols, "vals" => vals,
+                     "job_id" => jobId, "page_token" => pageToken))
+end
+
+@post "/query/next" function(req::HTTP.Request)
+    body = JSON3.read(req.body)
+    haskey(body, :job_id)     || return json(Dict("error" => "missing job_id"),     status=400)
+    haskey(body, :page_token) || return json(Dict("error" => "missing page_token"), status=400)
+    jobId     = string(body.job_id)
+    pageToken = string(body.page_token)
+    rowKeyCol = haskey(body, :row_key)    ? string(body.row_key)  : "id"
+    chunkSize = haskey(body, :chunk_size) ? Int(body.chunk_size)  : 10_000
+    srv = getServer()
+    aa, nextToken = _fetchPageGeneric(srv.session, srv.project, jobId, pageToken, chunkSize, rowKeyCol)
+    rows, cols, vals = find(aa)
+    return json(Dict("rows" => rows, "cols" => cols, "vals" => vals,
+                     "job_id" => jobId, "page_token" => nextToken))
 end
 
 function main()
