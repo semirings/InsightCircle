@@ -22,7 +22,7 @@ gcloud run deploy insight-calc \
   --image "$IMAGE" \
   --region us-central1 \
   --project creator-d4m-2026-1774038056 \
-  --memory 2Gi \
+  --memory 4Gi \
   --cpu 2 \
   --min-instances 1 \
   --max-instances 3 \
