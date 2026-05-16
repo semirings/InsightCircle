@@ -71,6 +71,7 @@ consortium_pilot.jsonl
 # SECRETS & CLOUD CONFIG (Virginia LLC Security)
 # ----------------------------------------------------------------------------
 # Firebase/GCP Service Account Keys
+.env
 *-key.json
 google-services.json
 GoogleService-Info.plist
