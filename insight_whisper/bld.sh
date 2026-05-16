@@ -20,6 +20,7 @@ gcloud run deploy insight-whisper \
   --project creator-d4m-2026-1774038056 \
   --memory 2Gi \
   --cpu 2 \
+  --timeout 3600 \
   --set-env-vars WHISPER_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/whisper-completion,GCP_PROJECT_ID=creator-d4m-2026-1774038056,WHISPER_INPUT_SUBSCRIPTION=projects/creator-d4m-2026-1774038056/subscriptions/whisper-input-sub
 
 echo "── Done"

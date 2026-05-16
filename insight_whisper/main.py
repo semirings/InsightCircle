@@ -1,24 +1,25 @@
 """InsightWhisper – FastAPI service with Pub/Sub-driven transcription.
 
 Subscribes to whisper_input events.  For each event:
-  1. Downloads the mp4 from GCS (gs://insightcircle_bucket/<gcs_path>).
+  1. Downloads audio from YouTube via yt-dlp (android player client).
   2. Transcribes with OpenAI Whisper (local model).
   3. Uploads transcript to gs://insightcircle_bucket/narrative/<video_id>.
   4. Publishes a whisper_completion event.
 
 Expected Pub/Sub message payload:
-  { "video_id": "<id>", "gcs_path": "uploads/<id>.mp4" }
+  { "video_id": "<youtube_video_id>" }
 
-Also exposes POST /transcribe?video_id=<id>&gcs_path=<path> for direct invocation.
+Also exposes POST /transcribe?video_id=<id> for direct invocation.
 """
 
-import base64
 import json
 import logging
 import os
+import base64
 from datetime import datetime, timezone
 
 import whisper
+import yt_dlp
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 
@@ -71,16 +72,42 @@ def _publish_completion(video_id: str, status: str, output_path: str) -> None:
     log.info("Published whisper_completion event (status=%s, msg_id=%s)", status, msg_id)
 
 
-def _run_transcription(video_id: str, gcs_path: str) -> dict:
-    """Download mp4 from GCS, transcribe with Whisper, upload transcript."""
-    local_path = f"/tmp/{video_id}.mp4"
+def _download_audio(video_id: str) -> str:
+    """Download audio from YouTube via yt-dlp. Returns path to local mp3.
 
-    log.info("Downloading gs://%s/%s", _BUCKET_NAME, gcs_path)
+    Uses the android player client, which bypasses YouTube's bot detection
+    for datacenter IPs without requiring cookies or a proxy.
+    """
+    url     = f"https://www.youtube.com/watch?v={video_id}"
+    out_tpl = f"/tmp/{video_id}.%(ext)s"
+    opts = {
+        "format":     "bestaudio/best",
+        "outtmpl":    out_tpl,
+        "postprocessors": [{
+            "key":            "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+        }],
+        "extractor_args": {"youtube": {"player_client": ["android"]}},
+        "quiet":      True,
+        "noplaylist": True,
+    }
+
+    log.info("Downloading audio for video_id=%s (android player)", video_id)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    local_path = f"/tmp/{video_id}.mp3"
+    if not os.path.exists(local_path):
+        raise RuntimeError(f"yt-dlp did not produce expected file: {local_path}")
+    return local_path
+
+
+def _run_transcription(video_id: str) -> dict:
+    """Download audio from YouTube, transcribe with Whisper, upload transcript."""
+    local_path = None
     try:
-        bucket = _get_storage().bucket(_BUCKET_NAME)
-        bucket.blob(gcs_path).download_to_filename(local_path)
+        local_path = _download_audio(video_id)
     except Exception as exc:
-        raise RuntimeError(f"GCS download failed: {exc}") from exc
+        raise RuntimeError(f"Audio download failed: {exc}") from exc
 
     log.info("Transcribing %s", local_path)
     try:
@@ -88,14 +115,15 @@ def _run_transcription(video_id: str, gcs_path: str) -> dict:
     except Exception as exc:
         raise RuntimeError(f"Transcription failed: {exc}") from exc
     finally:
-        if os.path.exists(local_path):
+        if local_path and os.path.exists(local_path):
             os.remove(local_path)
 
     transcript: str = result["text"].strip()
 
     out_path = f"{_NARRATIVE_PFX}/{video_id}"
     try:
-        blob = bucket.blob(out_path)
+        bucket = _get_storage().bucket(_BUCKET_NAME)
+        blob   = bucket.blob(out_path)
         blob.upload_from_string(transcript, content_type="text/plain")
         log.info("Uploaded transcript to gs://%s/%s", _BUCKET_NAME, out_path)
     except Exception as exc:
@@ -110,7 +138,7 @@ def _run_transcription(video_id: str, gcs_path: str) -> dict:
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="InsightWhisper", version="0.3.0")
+app = FastAPI(title="InsightWhisper", version="0.6.0")
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -122,19 +150,18 @@ def health() -> dict:
 
 @app.post("/pubsub/whisper-input", summary="Receive a Pub/Sub push notification for whisper-input")
 async def pubsub_whisper_input(request: Request) -> dict:
-    """Handle a Pub/Sub push envelope; download mp4 from GCS and transcribe."""
+    """Handle a Pub/Sub push envelope; download audio from YouTube and transcribe."""
     envelope = await request.json()
     try:
         data     = base64.b64decode(envelope["message"]["data"])
         payload  = json.loads(data)
-        gcs_path = payload["gcs_path"]
-        video_id = os.path.splitext(os.path.basename(gcs_path))[0]
+        video_id = payload["video_id"]
     except Exception as exc:
         log.error("Malformed Pub/Sub push message: %s", exc)
         raise HTTPException(status_code=400, detail="Malformed message") from exc
 
     try:
-        _run_transcription(video_id, gcs_path)
+        _run_transcription(video_id)
         _publish_completion(video_id, "completed", f"{_NARRATIVE_PFX}/{video_id}")
     except RuntimeError as exc:
         log.exception("Transcription failed for video_id=%s: %s", video_id, exc)
@@ -144,12 +171,11 @@ async def pubsub_whisper_input(request: Request) -> dict:
     return {"status": "ok", "video_id": video_id}
 
 
-@app.post("/transcribe", summary="Transcribe an mp4 already in GCS")
-def transcribe(gcs_path: str) -> dict:
-    """Direct invocation: download from GCS, transcribe, upload, publish completion."""
-    video_id = os.path.splitext(os.path.basename(gcs_path))[0]
+@app.post("/transcribe", summary="Transcribe a YouTube video by ID")
+def transcribe(video_id: str) -> dict:
+    """Direct invocation: download from YouTube, transcribe, upload, publish completion."""
     try:
-        result = _run_transcription(video_id, gcs_path)
+        result = _run_transcription(video_id)
     except RuntimeError as exc:
         _publish_completion(video_id, "failed", "")
         raise HTTPException(status_code=500, detail=str(exc)) from exc

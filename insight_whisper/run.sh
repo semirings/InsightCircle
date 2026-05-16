@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MP4="${1:?Usage: run.sh <path-to-mp4>}"
-FILENAME="$(basename "$MP4")"
+VIDEO_ID="${1:?Usage: run.sh <youtube_video_id>}"
 
 gcloud pubsub topics publish whisper-input \
-  --message="{\"gcs_path\": \"uploads/${FILENAME}\"}" \
+  --message="{\"video_id\": \"${VIDEO_ID}\"}" \
   --project=creator-d4m-2026-1774038056

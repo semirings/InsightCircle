@@ -6,7 +6,7 @@
 #   ./run.sh IC <query>
 #   ./run.sh IS <video_id> <whisper-completion|token-completion|ontology-completion>
 #   ./run.sh IT <video_id>
-#   ./run.sh IW <gcs_path>          e.g. uploads/myvideo.mp4
+#   ./run.sh IW <video_id>          e.g. pdNYw6qwuNc
 
 set -euo pipefail
 
