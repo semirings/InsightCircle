@@ -69,6 +69,30 @@ Host insight-dev-node.us-central1-a.creator-d4m-2026-1774038056
 EOF
 }
 
+# ── Secret Manager helpers ────────────────────────────────────────────────────
+
+SECRET_NAME="insightcircle-env"
+ENV_FILE="${ENV_FILE:-$HOME/populi.Wk/InsightCircle/.env}"
+
+env_pull() {
+    echo "Pulling latest $SECRET_NAME -> $ENV_FILE"
+    gcloud secrets versions access latest --secret="$SECRET_NAME" > "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
+}
+
+env_push() {
+    [[ -f "$ENV_FILE" ]] || { echo "No $ENV_FILE to push."; exit 1; }
+    if gcloud secrets describe "$SECRET_NAME" >/dev/null 2>&1; then
+        echo "Adding new version of $SECRET_NAME from $ENV_FILE"
+        gcloud secrets versions add "$SECRET_NAME" --data-file="$ENV_FILE"
+    else
+        echo "Creating $SECRET_NAME from $ENV_FILE"
+        gcloud secrets create "$SECRET_NAME" \
+            --data-file="$ENV_FILE" \
+            --replication-policy=automatic
+    fi
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 usage() {
@@ -77,6 +101,8 @@ usage() {
     echo "              tier: (none)=e2-standard-4, 2=t2d-standard-4, 4=n2-standard-4"
     echo "  -dn         stop   insight-dev-node"
     echo "  -st         status insight-dev-node"
+    echo "  -ep         pull .env from Secret Manager"
+    echo "  -es         push .env to Secret Manager (new version)"
     exit 1
 }
 
@@ -85,8 +111,10 @@ usage() {
 case "$1" in
     -up) cmd="start"    ;;
     -dn) cmd="stop"     ;;
-    -st) cmd="describe" ;;
-    *)   usage          ;;
+    -st) cmd="describe"  ;;
+    -ep) cmd="env-pull"  ;;
+    -es) cmd="env-push"  ;;
+    *)   usage           ;;
 esac
 
 case "${2:-}" in
@@ -98,6 +126,10 @@ esac
 
 case "$cmd" in
     start)
+        if [[ ! -f "$ENV_FILE" ]]; then
+            echo "$ENV_FILE missing; pulling from Secret Manager..."
+            env_pull
+        fi
         max_tries=10
         try=0
         while true; do
@@ -151,4 +183,7 @@ case "$cmd" in
         gcloud compute instances describe insight-dev-node \
             --zone=us-central1-a
         ;;
+
+    env-pull)  env_pull ;;
+    env-push)  env_push ;;
 esac
