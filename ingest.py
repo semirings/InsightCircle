@@ -35,6 +35,10 @@ from googleapiclient.errors import HttpError
 from google.cloud import storage
 from google.api_core.retry import Retry
 
+import ic_log
+
+log = ic_log.get_logger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -115,7 +119,7 @@ def uploadToGcs(localPath: str, contentType: str = "application/x-ndjson") -> st
     blob = bucket.blob(blobName)
     blob.upload_from_filename(localPath, content_type=contentType, retry=_GCS_RETRY)
     gcsUri = f"gs://{GCS_BUCKET}/{blobName}"
-    print(f"[gcs]   {localPath} → {gcsUri}", flush=True)
+    log.info("GCS upload complete", local_path=localPath, gcs_uri=gcsUri)
     return gcsUri
 
 
@@ -151,7 +155,7 @@ def collectVideoIds(keywords: list[str]) -> dict[str, str]:
             try:
                 info = ydl.extract_info(url, download=False)
             except Exception as exc:
-                print(f"[error]  keyword={keyword!r}: {exc}", file=sys.stderr)
+                log.exception("yt-dlp search failed", keyword=keyword)
                 continue
 
             if not info:

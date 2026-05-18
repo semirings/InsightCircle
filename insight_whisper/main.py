@@ -13,18 +13,17 @@ Also exposes POST /transcribe?video_id=<id> for direct invocation.
 """
 
 import json
-import logging
 import os
 import base64
 from datetime import datetime, timezone
 
+import ic_log
 import whisper
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+log = ic_log.get_logger(__name__)
 
 _BUCKET_NAME              = "insightcircle_bucket"
 _NARRATIVE_PFX            = "narrative"

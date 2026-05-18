@@ -15,15 +15,14 @@ Background pull:
 
 import base64
 import json
-import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import ic_log
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import bigquery, pubsub_v1, storage
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+log = ic_log.get_logger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -39,7 +38,7 @@ _storage_client = storage.Client()
 
 # ── PubSub pull callback ──────────────────────────────────────────────────────
 
-_AA_TABLES = {"tokens", "ontology", "ontology_gpc"}
+_AA_TABLES = {"tokens", "ontology", "ontology_gpc", "logs"}
 
 
 def _handle_aa(message: pubsub_v1.subscriber.message.Message) -> None:

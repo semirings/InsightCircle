@@ -14,20 +14,17 @@ Note: tokens AA is published by InsightToken directly.
 
 import base64
 import json
-import logging
 import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import ic_log
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
 from langchain_google_genai import ChatGoogleGenerativeAI
-
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
 
 _BUCKET_NAME               = "insightcircle_bucket"
 _NARRATIVE_PREFIX          = "narrative"
@@ -36,6 +33,8 @@ _ONTOLOGY_COMPLETION_TOPIC = os.environ["ONTOLOGY_COMPLETION_TOPIC"]
 _AA_INGEST_TOPIC           = os.environ["AA_INGEST_TOPIC"]
 _GCP_PROJECT               = os.environ["GCP_PROJECT"]
 _LLM_MODEL                 = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+
+log = ic_log.get_logger(__name__)
 
 log.info("STARTUP: model=%s project=%s bucket=%s", _LLM_MODEL, _GCP_PROJECT, _BUCKET_NAME)
 
@@ -55,10 +54,10 @@ _GPC_TITLES = _load_gpc_titles()
 
 app = FastAPI(title="Insight2Ontology", version="0.2.0")
 
-_storage_client      = None
-_publisher           = None
-_transformer_free    = None
-_transformer_gpc     = None
+_storage_client   = None
+_publisher        = None
+_transformer_free = None
+_transformer_gpc  = None
 
 
 # ── Lazy singletons ───────────────────────────────────────────────────────────

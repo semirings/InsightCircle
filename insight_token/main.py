@@ -10,16 +10,15 @@ Also exposes POST /tokenize?video_id=<id> for direct invocation.
 
 import base64
 import json
-import logging
 import os
 from datetime import datetime, timezone
 
+import ic_log
 import spacy
 from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
+log = ic_log.get_logger(__name__)
 
 _BUCKET_NAME             = "insightcircle_bucket"
 _IN_PREFIX               = "narrative"

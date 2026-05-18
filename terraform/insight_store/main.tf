@@ -134,6 +134,14 @@ resource "google_bigquery_table" "ontology_gpc" {
   schema              = local.aa_table_schema
 }
 
+resource "google_bigquery_table" "logs" {
+  dataset_id          = "insight_metadata"
+  table_id            = "logs"
+  deletion_protection = false
+  # Reuses the project-wide AA schema. video_id holds the log event_id (UUIDv7).
+  schema              = local.aa_table_schema
+}
+
 # ── BigQuery completion event tables ─────────────────────────────────────────
 
 resource "google_bigquery_table" "token_completion" {
