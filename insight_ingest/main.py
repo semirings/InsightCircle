@@ -12,11 +12,13 @@ Inter-phase handoff uses GCS so individual phases can be re-triggered
 with the same job_id without re-running earlier phases.
 
 GCS paths:
-  ingest-jobs/{job_id}/ids.json           Phase 1 → Phase 2
-  ingest-jobs/{job_id}/output.jsonl       Phase 2 → Phase 3  (metadata)
-  ingest-jobs/{job_id}/comments.jsonl     Phase 2 → Phase 3  (comments)
-  ingest/{job_id}.jsonl                   final metadata output
-  ingest/{job_id}_comments.jsonl          final comments output
+  ingest-jobs/{job_id}/ids.json                       Phase 1 → Phase 2
+  ingest-jobs/{job_id}/output.jsonl                   Phase 2 → Phase 3  (metadata)
+  ingest-jobs/{job_id}/comments.jsonl                 Phase 2 → Phase 3  (comments)
+  ingest-jobs/{job_id}/transcripts.jsonl              Phase 2 → Phase 3  (transcripts)
+  ingest/{YYYY-MM-DD}/{job_id}_meta.jsonl             final metadata output
+  ingest/{YYYY-MM-DD}/{job_id}_comments.jsonl         final comments output
+  ingest/{YYYY-MM-DD}/{job_id}_transcripts.jsonl      final transcripts output
 
 Trigger message (Pub/Sub JSON):
   {
@@ -30,6 +32,7 @@ Environment variables:
   GCP_PROJECT                 GCP project ID                   (required)
   INGEST_DEFAULT_KEYWORDS     JSON array of keyword strings     (optional)
   INGEST_COMMENTS_PER_VIDEO   max top-level comments per video  (default: 100)
+  INGEST_TRANSCRIPT_LANGS     comma-separated language preference (default: en)
 """
 
 import base64
@@ -38,7 +41,7 @@ import os
 import random
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -60,6 +63,9 @@ _RESULTS_PER_Q   = 250
 _API_BATCH_SIZE  = 50
 
 _COMMENTS_PER_VIDEO: int = int(os.getenv("INGEST_COMMENTS_PER_VIDEO", "100"))
+_TRANSCRIPT_LANGS: list[str] = [
+    l.strip() for l in os.getenv("INGEST_TRANSCRIPT_LANGS", "en").split(",") if l.strip()
+]
 
 _FLAT_YDL_OPTS = {
     "extract_flat": True,
@@ -251,6 +257,44 @@ def _phase2_comments(job_id: str, youtube, video_ids: list[str]) -> int:
     return len(all_comments)
 
 
+# ── Transcript helpers ────────────────────────────────────────────────────────
+
+def _fetch_video_transcript(video_id: str) -> list[dict]:
+    """Return transcript segments for a single video, or [] if unavailable."""
+    from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled  # noqa: PLC0415
+
+    try:
+        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=_TRANSCRIPT_LANGS)
+        return [{"video_id": video_id, **seg} for seg in segments]
+    except TranscriptsDisabled:
+        return []
+    except NoTranscriptFound:
+        return []
+    except Exception as exc:
+        log.warning("transcript fetch failed", video_id=video_id, error=str(exc))
+        return []
+
+
+def _phase2_transcripts(job_id: str, video_ids: list[str]) -> int:
+    """Fetch transcripts for all video_ids and write transcripts.jsonl to GCS. Returns segment count."""
+    log.info("Phase 2 transcripts start", job_id=job_id, video_count=len(video_ids))
+    all_segments: list[dict] = []
+
+    for i, vid in enumerate(video_ids):
+        all_segments.extend(_fetch_video_transcript(vid))
+        if (i + 1) % 50 == 0:
+            log.info("Phase 2 transcripts progress",
+                     job_id=job_id, processed=i + 1, total=len(video_ids),
+                     segments_so_far=len(all_segments))
+
+    ndjson = "\n".join(json.dumps(s, ensure_ascii=False) for s in all_segments)
+    _gcs_write(f"{_JOBS_PREFIX}/{job_id}/transcripts.jsonl", ndjson,
+               content_type="application/x-ndjson")
+    log.info("Phase 2 transcripts complete",
+             job_id=job_id, segment_count=len(all_segments))
+    return len(all_segments)
+
+
 # ── Phase 2 — Metadata enrichment ────────────────────────────────────────────
 
 def _parse_duration(iso: Optional[str]) -> Optional[int]:
@@ -348,6 +392,7 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None) -> dict[str, dict
     log.info("Phase 2 metadata complete", job_id=job_id, record_count=len(seen))
 
     _phase2_comments(job_id, youtube, list(seen.keys()))
+    _phase2_transcripts(job_id, list(seen.keys()))
     log.info("Phase 2 complete", job_id=job_id, record_count=len(seen))
     return seen
 
@@ -366,24 +411,37 @@ def _save_partial(job_id: str, seen: dict[str, dict]) -> None:
 def _phase3(job_id: str) -> dict[str, Optional[str]]:
     log.info("Phase 3 start", job_id=job_id)
 
+    date_prefix = datetime.now(timezone.utc).date().isoformat()  # YYYY-MM-DD
+
     src_meta = f"{_JOBS_PREFIX}/{job_id}/output.jsonl"
-    dst_meta = f"{_INGEST_PREFIX}/{job_id}.jsonl"
+    dst_meta = f"{_INGEST_PREFIX}/{date_prefix}/{job_id}_meta.jsonl"
     _gcs_copy(src_meta, dst_meta)
     meta_uri = f"gs://{_GCS_BUCKET}/{dst_meta}"
 
+    bucket = _get_storage().bucket(_GCS_BUCKET)
+
     comments_uri: Optional[str] = None
     src_comments = f"{_JOBS_PREFIX}/{job_id}/comments.jsonl"
-    dst_comments = f"{_INGEST_PREFIX}/{job_id}_comments.jsonl"
-    bucket = _get_storage().bucket(_GCS_BUCKET)
+    dst_comments = f"{_INGEST_PREFIX}/{date_prefix}/{job_id}_comments.jsonl"
     if bucket.blob(src_comments).exists():
         _gcs_copy(src_comments, dst_comments)
         comments_uri = f"gs://{_GCS_BUCKET}/{dst_comments}"
     else:
         log.warning("Phase 3 comments file missing — skipping", job_id=job_id)
 
+    transcripts_uri: Optional[str] = None
+    src_transcripts = f"{_JOBS_PREFIX}/{job_id}/transcripts.jsonl"
+    dst_transcripts = f"{_INGEST_PREFIX}/{date_prefix}/{job_id}_transcripts.jsonl"
+    if bucket.blob(src_transcripts).exists():
+        _gcs_copy(src_transcripts, dst_transcripts)
+        transcripts_uri = f"gs://{_GCS_BUCKET}/{dst_transcripts}"
+    else:
+        log.warning("Phase 3 transcripts file missing — skipping", job_id=job_id)
+
     log.info("Phase 3 complete",
-             job_id=job_id, gcs_uri=meta_uri, comments_uri=comments_uri)
-    return {"gcs_uri": meta_uri, "comments_uri": comments_uri}
+             job_id=job_id, gcs_uri=meta_uri,
+             comments_uri=comments_uri, transcripts_uri=transcripts_uri)
+    return {"gcs_uri": meta_uri, "comments_uri": comments_uri, "transcripts_uri": transcripts_uri}
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -425,15 +483,17 @@ async def pubsub_ingest(request: Request) -> dict:
     if phase in ("3", "all"):
         phase3_uris = _phase3(job_id)
 
-    gcs_uri      = (phase3_uris or {}).get("gcs_uri")
-    comments_uri = (phase3_uris or {}).get("comments_uri")
+    gcs_uri         = (phase3_uris or {}).get("gcs_uri")
+    comments_uri    = (phase3_uris or {}).get("comments_uri")
+    transcripts_uri = (phase3_uris or {}).get("transcripts_uri")
 
     log.info("Ingest job complete", job_id=job_id, phase=phase,
-             gcs_uri=gcs_uri, comments_uri=comments_uri)
+             gcs_uri=gcs_uri, comments_uri=comments_uri, transcripts_uri=transcripts_uri)
     return {
-        "status":       "ok",
-        "job_id":       job_id,
-        "phase":        phase,
-        "gcs_uri":      gcs_uri,
-        "comments_uri": comments_uri,
+        "status":          "ok",
+        "job_id":          job_id,
+        "phase":           phase,
+        "gcs_uri":         gcs_uri,
+        "comments_uri":    comments_uri,
+        "transcripts_uri": transcripts_uri,
     }

@@ -4,6 +4,7 @@
 # Usage:
 #   ./run.sh I2 <video_id>
 #   ./run.sh IC <query>
+#   ./run.sh II [--phase 1|2|3|all] [--job-id <id>] [--keywords '["k1","k2"]']
 #   ./run.sh IS <video_id> <whisper-completion|token-completion|ontology-completion>
 #   ./run.sh IT <video_id>
 #   ./run.sh IW <video_id>          e.g. pdNYw6qwuNc
@@ -15,14 +16,15 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 declare -A SERVICE_DIR=(
   [I2]="$ROOT/insight_2ontology"
   [IC]="$ROOT/insight_calc"
+  [II]="$ROOT/insight_ingest"
   [IS]="$ROOT/insight_store"
   [IT]="$ROOT/insight_token"
   [IW]="$ROOT/insight_whisper"
 )
 
-KEY="${1:?Usage: ./run.sh <I2|IC|IS|IT|IW> [args...]}"
+KEY="${1:?Usage: ./run.sh <I2|IC|II|IS|IT|IW> [args...]}"
 shift
 
-dir="${SERVICE_DIR[$KEY]:?Unknown service key: $KEY. Valid keys: I2 IC IS IT IW}"
+dir="${SERVICE_DIR[$KEY]:?Unknown service key: $KEY. Valid keys: I2 IC II IS IT IW}"
 
 bash "$dir/run.sh" "$@"
