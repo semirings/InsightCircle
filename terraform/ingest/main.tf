@@ -40,6 +40,12 @@ resource "google_pubsub_topic" "ingest_trigger" {
   name = "ingest-trigger"
 }
 
+# ── Pub/Sub: ingest-completion topic (published by II, consumed by I2) ────────
+
+resource "google_pubsub_topic" "ingest_completion" {
+  name = "ingest-completion"
+}
+
 resource "google_cloud_run_v2_service_iam_member" "pubsub_invoker" {
   project  = var.project_id
   location = var.region
@@ -83,6 +89,11 @@ resource "google_cloud_run_v2_service" "insight_ingest" {
       }
 
       env {
+        name  = "INGEST_COMPLETION_TOPIC"
+        value = "projects/${var.project_id}/topics/ingest-completion"
+      }
+
+      env {
         name = "YOUTUBE_API_KEY"
         value_source {
           secret_key_ref {
@@ -110,4 +121,8 @@ output "ingest_service_url" {
 
 output "ingest_trigger_topic" {
   value = google_pubsub_topic.ingest_trigger.id
+}
+
+output "ingest_completion_topic" {
+  value = google_pubsub_topic.ingest_completion.id
 }

@@ -47,7 +47,7 @@ from typing import Optional
 
 import ic_log
 from fastapi import FastAPI, HTTPException, Request
-from google.cloud import storage
+from google.cloud import pubsub_v1, storage
 from google.api_core.retry import Retry
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -55,6 +55,8 @@ from googleapiclient.errors import HttpError
 log = ic_log.get_logger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
+_INGEST_COMPLETION_TOPIC = os.environ.get("INGEST_COMPLETION_TOPIC", "")
 
 _GCS_BUCKET      = "insightcircle_bucket"
 _JOBS_PREFIX     = "ingest-jobs"   # intermediate: ingest-jobs/{job_id}/...
@@ -93,7 +95,30 @@ _DEFAULT_KEYWORDS: list[str] = json.loads(
 
 # ── Lazy singletons ───────────────────────────────────────────────────────────
 
-_storage_client = None
+_storage_client   = None
+_publisher_client = None
+
+
+def _get_publisher() -> pubsub_v1.PublisherClient:
+    global _publisher_client
+    if _publisher_client is None:
+        _publisher_client = pubsub_v1.PublisherClient()
+    return _publisher_client
+
+
+def _publish_ingest_completion(job_id: str, uris: dict) -> None:
+    if not _INGEST_COMPLETION_TOPIC:
+        log.warning("INGEST_COMPLETION_TOPIC not set — skipping completion publish",
+                    job_id=job_id)
+        return
+    payload = json.dumps({
+        "job_id":          job_id,
+        "gcs_uri":         uris.get("gcs_uri"),
+        "comments_uri":    uris.get("comments_uri"),
+        "transcripts_uri": uris.get("transcripts_uri"),
+    }).encode("utf-8")
+    _get_publisher().publish(_INGEST_COMPLETION_TOPIC, payload).result()
+    log.info("Published ingest-completion", job_id=job_id)
 
 
 def _get_storage() -> storage.Client:
@@ -482,6 +507,8 @@ async def pubsub_ingest(request: Request) -> dict:
 
     if phase in ("3", "all"):
         phase3_uris = _phase3(job_id)
+        if phase3_uris:
+            _publish_ingest_completion(job_id, phase3_uris)
 
     gcs_uri         = (phase3_uris or {}).get("gcs_uri")
     comments_uri    = (phase3_uris or {}).get("comments_uri")

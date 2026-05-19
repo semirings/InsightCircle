@@ -38,7 +38,14 @@ _storage_client = storage.Client()
 
 # ── PubSub pull callback ──────────────────────────────────────────────────────
 
-_AA_TABLES = {"tokens", "ontology", "ontology_gpc", "logs"}
+_AA_TABLES = {
+    "tokens",
+    "ontology", "ontology_gpc",
+    "ontology_comments", "ontology_comments_gpc",
+    "ontology_transcripts", "ontology_transcripts_gpc",
+    "ontology_threads", "ontology_threads_gpc",
+    "logs",
+}
 
 
 def _handle_aa(message: pubsub_v1.subscriber.message.Message) -> None:

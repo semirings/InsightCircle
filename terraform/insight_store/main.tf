@@ -142,6 +142,48 @@ resource "google_bigquery_table" "logs" {
   schema              = local.aa_table_schema
 }
 
+resource "google_bigquery_table" "ontology_comments" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_comments"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_comments_gpc" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_comments_gpc"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_transcripts" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_transcripts"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_transcripts_gpc" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_transcripts_gpc"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_threads" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_threads"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_threads_gpc" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_threads_gpc"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
 # ── BigQuery completion event tables ─────────────────────────────────────────
 
 resource "google_bigquery_table" "token_completion" {

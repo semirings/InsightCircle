@@ -10,9 +10,10 @@ provider "google" {
 }
 
 locals {
-  image                    = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-2ontology:${var.image_tag}"
-  whisper_completion_topic = "projects/${var.project_id}/topics/whisper-completion"
+  image                     = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_repo}/insight-2ontology:${var.image_tag}"
+  whisper_completion_topic  = "projects/${var.project_id}/topics/whisper-completion"
   ontology_completion_topic = "projects/${var.project_id}/topics/ontology-completion"
+  ingest_completion_topic   = "projects/${var.project_id}/topics/ingest-completion"
 }
 
 # ── Service account ───────────────────────────────────────────────────────────
@@ -56,6 +57,23 @@ resource "google_pubsub_topic" "ontology_completion" {
 
 resource "google_pubsub_topic" "aa_ingest" {
   name = "aa-ingest"
+}
+
+# ── Pub/Sub: ingest-completion push subscription ─────────────────────────────
+
+resource "google_pubsub_subscription" "ingest_completion_sub" {
+  name  = "i2-ingest-completion-sub"
+  topic = local.ingest_completion_topic
+
+  ack_deadline_seconds = 600  # batch LLM processing can be slow
+
+  push_config {
+    push_endpoint = "${google_cloud_run_v2_service.insight_2ontology.uri}/pubsub/ingest-completion"
+
+    oidc_token {
+      service_account_email = google_service_account.insight_2ontology.email
+    }
+  }
 }
 
 # ── Pub/Sub: whisper-completion push subscription ────────────────────────────

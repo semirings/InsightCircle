@@ -101,6 +101,27 @@ def _get_transformer_gpc() -> LLMGraphTransformer | None:
     return _transformer_gpc
 
 
+# ── GCS NDJSON helpers ────────────────────────────────────────────────────────
+
+def _load_ndjson(gcs_uri: str) -> list[dict]:
+    """Download an NDJSON file from a gs:// URI and return parsed records."""
+    path = gcs_uri[len("gs://"):]
+    bucket_name, blob_name = path.split("/", 1)
+    text = _get_storage().bucket(bucket_name).blob(blob_name).download_as_text()
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _group_text_by_video(records: list[dict], text_key: str = "text") -> dict[str, str]:
+    """Concatenate text fields by video_id."""
+    parts: dict[str, list[str]] = {}
+    for r in records:
+        vid  = r.get("video_id")
+        text = r.get(text_key, "")
+        if vid and text:
+            parts.setdefault(vid, []).append(str(text))
+    return {vid: " ".join(ts) for vid, ts in parts.items()}
+
+
 # ── AA helpers ────────────────────────────────────────────────────────────────
 
 def _graph_docs_to_aa(video_id: str, graph_docs, table_name: str) -> dict:
@@ -149,6 +170,38 @@ def _publish_ontology_completion(video_id: str, status: str,
     future.result()
     log.info("Published ontology_completion status=%s video_id=%s nodes=%d rels=%d",
              status, video_id, node_count, rel_count)
+
+
+# ── Multi-video content processor ────────────────────────────────────────────
+
+def _process_content(
+    job_id: str,
+    texts_by_video: dict[str, str],
+    table_free: str,
+    table_gpc: str,
+) -> tuple[int, int]:
+    """Run both transformers over per-video texts and publish AA to BQ via aa-ingest."""
+    total_nodes = 0
+    total_rels  = 0
+
+    for video_id, text in texts_by_video.items():
+        if not text.strip():
+            continue
+        docs = [Document(page_content=text)]
+
+        graph_docs_free = _get_transformer_free().convert_to_graph_documents(docs)
+        _publish_aa(_graph_docs_to_aa(video_id, graph_docs_free, table_free))
+        total_nodes += sum(len(gd.nodes) for gd in graph_docs_free)
+        total_rels  += sum(len(gd.relationships) for gd in graph_docs_free)
+
+        transformer_gpc = _get_transformer_gpc()
+        if transformer_gpc:
+            graph_docs_gpc = transformer_gpc.convert_to_graph_documents(docs)
+            _publish_aa(_graph_docs_to_aa(video_id, graph_docs_gpc, table_gpc))
+
+    log.info("_process_content done job_id=%s table=%s videos=%d nodes=%d rels=%d",
+             job_id, table_free, len(texts_by_video), total_nodes, total_rels)
+    return total_nodes, total_rels
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -203,6 +256,44 @@ def transform(video_id: str) -> dict:
     result = _process_narrative(video_id)
     log.info("DONE: /transform video_id=%s elapsed=%.1fs", video_id, time.monotonic() - t0)
     return result
+
+
+@app.post("/pubsub/ingest-completion",
+          summary="Transform comments and transcripts from a completed ingest job")
+async def pubsub_ingest_completion(request: Request) -> dict:
+    log.info("REQUEST: /pubsub/ingest-completion received")
+    envelope = await request.json()
+    try:
+        data    = base64.b64decode(envelope["message"]["data"])
+        payload = json.loads(data)
+        job_id  = payload["job_id"]
+    except Exception as exc:
+        log.error("PARSE ERROR: malformed ingest-completion message: %s", exc)
+        raise HTTPException(status_code=400, detail="Malformed message") from exc
+
+    log.info("REQUEST: ingest-completion job_id=%s", job_id)
+    total_nodes = total_rels = 0
+
+    comments_uri = payload.get("comments_uri")
+    if comments_uri:
+        log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)
+        records = _load_ndjson(comments_uri)
+        texts   = _group_text_by_video(records)
+        n, r    = _process_content(job_id, texts, "ontology_comments", "ontology_comments_gpc")
+        total_nodes += n; total_rels += r
+
+    transcripts_uri = payload.get("transcripts_uri")
+    if transcripts_uri:
+        log.info("Processing transcripts job_id=%s uri=%s", job_id, transcripts_uri)
+        records = _load_ndjson(transcripts_uri)
+        texts   = _group_text_by_video(records)
+        n, r    = _process_content(job_id, texts, "ontology_transcripts", "ontology_transcripts_gpc")
+        total_nodes += n; total_rels += r
+
+    log.info("DONE: ingest-completion job_id=%s total_nodes=%d total_rels=%d",
+             job_id, total_nodes, total_rels)
+    return {"status": "ok", "job_id": job_id,
+            "total_nodes": total_nodes, "total_rels": total_rels}
 
 
 # ── Core processing ───────────────────────────────────────────────────────────
