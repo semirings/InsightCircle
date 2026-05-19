@@ -1,19 +1,22 @@
 """InsightIngest — FastAPI microservice.
 
 Triggered by a Pub/Sub push subscription on the ingest-trigger topic.
-Runs the three-phase YouTube metadata ingestion pipeline:
+Runs the three-phase YouTube metadata + comments ingestion pipeline:
 
-  Phase 1 — yt-dlp extract_flat  → {video_id: title} → GCS ids file
-  Phase 2 — YouTube Data API v3  → enriched records   → GCS output file
-  Phase 3 — GCS copy             → final ingest/ location
+  Phase 1 — yt-dlp extract_flat  → {video_id: title}  → GCS ids file
+  Phase 2 — YouTube Data API v3  → enriched records    → GCS output file
+             commentThreads API  → top-level comments  → GCS comments file
+  Phase 3 — GCS copy             → final ingest/ location (both files)
 
 Inter-phase handoff uses GCS so individual phases can be re-triggered
 with the same job_id without re-running earlier phases.
 
 GCS paths:
-  ingest-jobs/{job_id}/ids.json          Phase 1 → Phase 2
-  ingest-jobs/{job_id}/output.jsonl      Phase 2 → Phase 3
-  ingest/{job_id}.jsonl                  final output (read by downstream)
+  ingest-jobs/{job_id}/ids.json           Phase 1 → Phase 2
+  ingest-jobs/{job_id}/output.jsonl       Phase 2 → Phase 3  (metadata)
+  ingest-jobs/{job_id}/comments.jsonl     Phase 2 → Phase 3  (comments)
+  ingest/{job_id}.jsonl                   final metadata output
+  ingest/{job_id}_comments.jsonl          final comments output
 
 Trigger message (Pub/Sub JSON):
   {
@@ -23,9 +26,10 @@ Trigger message (Pub/Sub JSON):
   }
 
 Environment variables:
-  YOUTUBE_API_KEY           YouTube Data API v3 key        (required)
-  GCP_PROJECT               GCP project ID                 (required)
-  INGEST_DEFAULT_KEYWORDS   JSON array of keyword strings  (optional)
+  YOUTUBE_API_KEY             YouTube Data API v3 key          (required)
+  GCP_PROJECT                 GCP project ID                   (required)
+  INGEST_DEFAULT_KEYWORDS     JSON array of keyword strings     (optional)
+  INGEST_COMMENTS_PER_VIDEO   max top-level comments per video  (default: 100)
 """
 
 import base64
@@ -54,6 +58,8 @@ _JOBS_PREFIX     = "ingest-jobs"   # intermediate: ingest-jobs/{job_id}/...
 _INGEST_PREFIX   = "ingest"        # final output: ingest/{job_id}.jsonl
 _RESULTS_PER_Q   = 250
 _API_BATCH_SIZE  = 50
+
+_COMMENTS_PER_VIDEO: int = int(os.getenv("INGEST_COMMENTS_PER_VIDEO", "100"))
 
 _FLAT_YDL_OPTS = {
     "extract_flat": True,
@@ -177,6 +183,74 @@ def _phase1(job_id: str, keywords: list[str]) -> dict[str, str]:
     return raw
 
 
+# ── Comments helpers ──────────────────────────────────────────────────────────
+
+def _fetch_video_comments(youtube, video_id: str) -> list[dict]:
+    """Return up to _COMMENTS_PER_VIDEO top-level comments for a single video."""
+    results: list[dict] = []
+    page_token: Optional[str] = None
+
+    while len(results) < _COMMENTS_PER_VIDEO:
+        remaining = _COMMENTS_PER_VIDEO - len(results)
+        kwargs = dict(
+            part="snippet",
+            videoId=video_id,
+            maxResults=min(remaining, 100),
+            textFormat="plainText",
+        )
+        if page_token:
+            kwargs["pageToken"] = page_token
+        try:
+            resp = youtube.commentThreads().list(**kwargs).execute()
+        except HttpError as exc:
+            if exc.resp.status == 403 and "commentsDisabled" in str(exc):
+                break  # silently skip videos with comments disabled
+            log.warning("commentThreads.list failed",
+                        video_id=video_id, error=str(exc))
+            break
+
+        for item in (resp.get("items") or []):
+            top = (item.get("snippet") or {}).get("topLevelComment") or {}
+            s = (top.get("snippet") or {})
+            results.append({
+                "video_id":    video_id,
+                "comment_id":  top.get("id"),
+                "author":      s.get("authorDisplayName"),
+                "text":        s.get("textDisplay"),
+                "likes":       s.get("likeCount", 0),
+                "published_at": s.get("publishedAt"),
+                "updated_at":  s.get("updatedAt"),
+                "reply_count": (item.get("snippet") or {}).get("totalReplyCount", 0),
+            })
+
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+
+    return results
+
+
+def _phase2_comments(job_id: str, youtube, video_ids: list[str]) -> int:
+    """Fetch comments for all video_ids and write comments.jsonl to GCS. Returns comment count."""
+    log.info("Phase 2 comments start", job_id=job_id, video_count=len(video_ids))
+    all_comments: list[dict] = []
+
+    for i, vid in enumerate(video_ids):
+        comments = _fetch_video_comments(youtube, vid)
+        all_comments.extend(comments)
+        if (i + 1) % 50 == 0:
+            log.info("Phase 2 comments progress",
+                     job_id=job_id, processed=i + 1, total=len(video_ids),
+                     comments_so_far=len(all_comments))
+
+    ndjson = "\n".join(json.dumps(c, ensure_ascii=False) for c in all_comments)
+    _gcs_write(f"{_JOBS_PREFIX}/{job_id}/comments.jsonl", ndjson,
+               content_type="application/x-ndjson")
+    log.info("Phase 2 comments complete",
+             job_id=job_id, comment_count=len(all_comments))
+    return len(all_comments)
+
+
 # ── Phase 2 — Metadata enrichment ────────────────────────────────────────────
 
 def _parse_duration(iso: Optional[str]) -> Optional[int]:
@@ -271,6 +345,9 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None) -> dict[str, dict
     ndjson = "\n".join(json.dumps(r, ensure_ascii=False) for r in seen.values())
     _gcs_write(f"{_JOBS_PREFIX}/{job_id}/output.jsonl", ndjson,
                content_type="application/x-ndjson")
+    log.info("Phase 2 metadata complete", job_id=job_id, record_count=len(seen))
+
+    _phase2_comments(job_id, youtube, list(seen.keys()))
     log.info("Phase 2 complete", job_id=job_id, record_count=len(seen))
     return seen
 
@@ -286,14 +363,27 @@ def _save_partial(job_id: str, seen: dict[str, dict]) -> None:
 
 # ── Phase 3 — Promote to final location ───────────────────────────────────────
 
-def _phase3(job_id: str) -> str:
-    src = f"{_JOBS_PREFIX}/{job_id}/output.jsonl"
-    dst = f"{_INGEST_PREFIX}/{job_id}.jsonl"
+def _phase3(job_id: str) -> dict[str, Optional[str]]:
     log.info("Phase 3 start", job_id=job_id)
-    _gcs_copy(src, dst)
-    gcs_uri = f"gs://{_GCS_BUCKET}/{dst}"
-    log.info("Phase 3 complete", job_id=job_id, gcs_uri=gcs_uri)
-    return gcs_uri
+
+    src_meta = f"{_JOBS_PREFIX}/{job_id}/output.jsonl"
+    dst_meta = f"{_INGEST_PREFIX}/{job_id}.jsonl"
+    _gcs_copy(src_meta, dst_meta)
+    meta_uri = f"gs://{_GCS_BUCKET}/{dst_meta}"
+
+    comments_uri: Optional[str] = None
+    src_comments = f"{_JOBS_PREFIX}/{job_id}/comments.jsonl"
+    dst_comments = f"{_INGEST_PREFIX}/{job_id}_comments.jsonl"
+    bucket = _get_storage().bucket(_GCS_BUCKET)
+    if bucket.blob(src_comments).exists():
+        _gcs_copy(src_comments, dst_comments)
+        comments_uri = f"gs://{_GCS_BUCKET}/{dst_comments}"
+    else:
+        log.warning("Phase 3 comments file missing — skipping", job_id=job_id)
+
+    log.info("Phase 3 complete",
+             job_id=job_id, gcs_uri=meta_uri, comments_uri=comments_uri)
+    return {"gcs_uri": meta_uri, "comments_uri": comments_uri}
 
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -323,8 +413,8 @@ async def pubsub_ingest(request: Request) -> dict:
     log.info("Ingest job received", job_id=job_id, phase=phase,
              keyword_count=len(keywords))
 
-    raw:     Optional[dict[str, str]]   = None
-    gcs_uri: Optional[str]              = None
+    raw:          Optional[dict[str, str]]         = None
+    phase3_uris:  Optional[dict[str, Optional[str]]] = None
 
     if phase in ("1", "all"):
         raw = _phase1(job_id, keywords)
@@ -333,7 +423,17 @@ async def pubsub_ingest(request: Request) -> dict:
         raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
 
     if phase in ("3", "all"):
-        gcs_uri = _phase3(job_id)
+        phase3_uris = _phase3(job_id)
 
-    log.info("Ingest job complete", job_id=job_id, phase=phase, gcs_uri=gcs_uri)
-    return {"status": "ok", "job_id": job_id, "phase": phase, "gcs_uri": gcs_uri}
+    gcs_uri      = (phase3_uris or {}).get("gcs_uri")
+    comments_uri = (phase3_uris or {}).get("comments_uri")
+
+    log.info("Ingest job complete", job_id=job_id, phase=phase,
+             gcs_uri=gcs_uri, comments_uri=comments_uri)
+    return {
+        "status":       "ok",
+        "job_id":       job_id,
+        "phase":        phase,
+        "gcs_uri":      gcs_uri,
+        "comments_uri": comments_uri,
+    }
