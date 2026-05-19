@@ -3,7 +3,7 @@
 Triggered by a Pub/Sub push subscription on the ingest-trigger topic.
 Runs the three-phase YouTube metadata + comments ingestion pipeline:
 
-  Phase 1 — yt-dlp extract_flat  → {video_id: title}  → GCS ids file
+  Phase 1 — YouTube search.list  → {video_id: title}  → GCS ids file
   Phase 2 — YouTube Data API v3  → enriched records    → GCS output file
              commentThreads API  → top-level comments  → GCS comments file
   Phase 3 — GCS copy             → final ingest/ location (both files)
@@ -68,13 +68,7 @@ _COMMENTS_PER_VIDEO: int = int(os.getenv("INGEST_COMMENTS_PER_VIDEO", "100"))
 _TRANSCRIPT_LANGS: list[str] = [
     l.strip() for l in os.getenv("INGEST_TRANSCRIPT_LANGS", "en").split(",") if l.strip()
 ]
-
-_FLAT_YDL_OPTS = {
-    "extract_flat": True,
-    "quiet":        True,
-    "no_warnings":  True,
-    "ignoreerrors": True,
-}
+_SEARCH_PAGE_SIZE = 50   # YouTube search.list max per page
 
 _GCS_RETRY = Retry(initial=1.0, maximum=60.0, multiplier=2.0, deadline=300.0)
 
@@ -168,42 +162,50 @@ def _gcs_copy(src_blob: str, dst_blob: str) -> None:
 # ── Phase 1 — ID collection ───────────────────────────────────────────────────
 
 def _phase1(job_id: str, keywords: list[str]) -> dict[str, str]:
-    from yt_dlp import YoutubeDL  # noqa: PLC0415 — heavy import, deferred
-
+    youtube = _get_youtube()
     log.info("Phase 1 start", job_id=job_id, keyword_count=len(keywords))
     raw: dict[str, str] = {}
 
-    with YoutubeDL(_FLAT_YDL_OPTS) as ydl:
-        for i, keyword in enumerate(keywords):
-            url = f"ytsearch{_RESULTS_PER_Q}:{keyword}"
-            log.info("Phase 1 searching", job_id=job_id, keyword=keyword)
+    for i, keyword in enumerate(keywords):
+        log.info("Phase 1 searching", job_id=job_id, keyword=keyword)
+        added      = 0
+        collected  = 0
+        page_token: Optional[str] = None
+
+        while collected < _RESULTS_PER_Q:
+            kwargs: dict = dict(
+                part="snippet",
+                q=keyword,
+                type="video",
+                maxResults=min(_RESULTS_PER_Q - collected, _SEARCH_PAGE_SIZE),
+                relevanceLanguage="en",
+            )
+            if page_token:
+                kwargs["pageToken"] = page_token
             try:
-                info = ydl.extract_info(url, download=False)
-            except Exception:
-                log.exception("yt-dlp search failed", job_id=job_id, keyword=keyword)
-                continue
+                response = youtube.search().list(**kwargs).execute()
+            except HttpError as exc:
+                log.warning("search.list failed", job_id=job_id, keyword=keyword, error=str(exc))
+                break
 
-            if not info:
-                log.warning("No result object", job_id=job_id, keyword=keyword)
-                continue
-
-            added = 0
-            for entry in (info.get("entries") or []):
-                if not entry:
-                    continue
-                vid = entry.get("id")
+            for item in (response.get("items") or []):
+                vid   = (item.get("id") or {}).get("videoId")
+                title = (item.get("snippet") or {}).get("title") or ""
                 if vid and vid not in raw:
-                    raw[vid] = entry.get("title") or ""
+                    raw[vid] = title
                     added += 1
+                collected += 1
 
-            log.info("Phase 1 keyword done",
-                     job_id=job_id, keyword=keyword,
-                     added=added, total=len(raw))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
 
-            if i < len(keywords) - 1:
-                jitter = random.uniform(5, 15)
-                log.info("Phase 1 jitter sleep", job_id=job_id, seconds=round(jitter, 1))
-                time.sleep(jitter)
+        log.info("Phase 1 keyword done",
+                 job_id=job_id, keyword=keyword, added=added, total=len(raw))
+
+        if i < len(keywords) - 1:
+            jitter = random.uniform(1, 3)
+            time.sleep(jitter)
 
     if not raw:
         raise HTTPException(status_code=500, detail="Phase 1 collected zero video IDs")

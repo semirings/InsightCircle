@@ -8,6 +8,7 @@
 # Service keys:
 #   I2 → insight_2ontology
 #   IC → insight_calc
+#   II → insight_ingest
 #   IS → insight_store
 #   IT → insight_token
 #   IW → insight_whisper
@@ -19,12 +20,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 declare -A SERVICE_DIR=(
   [I2]="$ROOT/insight_2ontology"
   [IC]="$ROOT/insight_calc"
+  [II]="$ROOT/insight_ingest"
   [IS]="$ROOT/insight_store"
   [IT]="$ROOT/insight_token"
   [IW]="$ROOT/insight_whisper"
 )
 
-ORDERED=(I2 IC IS IT IW)
+ORDERED=(I2 IC II IS IT IW)
 
 TARGETS=()
 FLAGS=()

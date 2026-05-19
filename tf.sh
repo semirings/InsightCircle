@@ -8,6 +8,7 @@
 # Service keys:
 #   I2 → terraform/insight_2ontology
 #   IC → terraform/insight_calc
+#   II → terraform/ingest
 #   IS → terraform/insight_store
 #   IT → terraform/insight_token
 #   IW → terraform/insight_whisper
@@ -19,12 +20,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 declare -A MODULE_DIR=(
   [I2]="$ROOT/terraform/insight_2ontology"
   [IC]="$ROOT/terraform/insight_calc"
+  [II]="$ROOT/terraform/ingest"
   [IS]="$ROOT/terraform/insight_store"
   [IT]="$ROOT/terraform/insight_token"
   [IW]="$ROOT/terraform/insight_whisper"
 )
 
-ORDERED=(I2 IC IS IT IW)
+ORDERED=(I2 IC II IS IT IW)
 
 if [[ $# -gt 0 ]]; then
   TARGETS=("$@")
