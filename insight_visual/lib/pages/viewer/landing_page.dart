@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../widgets/looker_embed.dart';
+import '../../widgets/looker_embed.dart';
 
 // ── Palette (from landing.pen) ─────────────────────────────────────────────
 // These mirror theme.dart values but are kept explicit to the design file.

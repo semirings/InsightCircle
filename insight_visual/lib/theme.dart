@@ -17,6 +17,38 @@ const kGray400             = Color(0xFF9CA3AF);
 const kGray500             = Color(0xFF6B7280);
 const kGray600             = Color(0xFF4B5563);
 
+// ── Admin dark palette ─────────────────────────────────────────────────────
+const kAdminBg         = Color(0xFF0F0F0F);
+const kAdminSurface    = Color(0xFF1A1A1A);
+const kAdminSurfaceLow = Color(0xFF141414);
+const kAdminBorder     = Color(0xFF2A2A2A);
+const kAdminBorderMid  = Color(0xFF383838);
+const kAdminText       = Color(0xFFE2E8F0);
+const kAdminTextMuted  = Color(0xFF94A3B8);
+const kAdminTextDim    = Color(0xFF4B5563);
+const kAdminAccent     = Color(0xFFEF4444); // brighter red on dark bg
+const kAdminGreen      = Color(0xFF22C55E);
+const kAdminBlue       = Color(0xFF3B82F6);
+
+ThemeData buildDarkTheme() {
+  final base = ThemeData.dark(useMaterial3: true);
+  return base.copyWith(
+    colorScheme: const ColorScheme.dark(
+      primary: kAdminText,
+      onPrimary: kAdminBg,
+      secondary: kAdminAccent,
+      onSecondary: kAdminText,
+      surface: kAdminSurface,
+      onSurface: kAdminText,
+    ),
+    scaffoldBackgroundColor: kAdminBg,
+    textTheme: GoogleFonts.interTextTheme(base.textTheme).apply(
+      bodyColor: kAdminText,
+      displayColor: kAdminText,
+    ),
+  );
+}
+
 ThemeData buildTheme() {
   final base = ThemeData.light(useMaterial3: true);
   return base.copyWith(

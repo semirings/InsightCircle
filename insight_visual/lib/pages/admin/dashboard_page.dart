@@ -2,10 +2,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../theme.dart';
-import '../widgets/ingest_action_card.dart';
-import '../widgets/loader_action_card.dart';
-import '../widgets/looker_embed.dart';
+import '../../theme.dart';
+import '../../widgets/admin/ingest_action_card.dart';
+import '../../widgets/admin/loader_action_card.dart';
+import '../../widgets/looker_embed.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 

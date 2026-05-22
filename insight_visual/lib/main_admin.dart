@@ -1,22 +1,22 @@
 import 'package:flutter/material.dart';
 
-import 'pages/viewer/landing_page.dart';
+import 'pages/admin/admin_screen.dart';
 import 'theme.dart';
 
 void main() {
-  runApp(const InsightViewerApp());
+  runApp(const InsightVisualApp());
 }
 
-class InsightViewerApp extends StatelessWidget {
-  const InsightViewerApp({super.key});
+class InsightVisualApp extends StatelessWidget {
+  const InsightVisualApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'InsightCircle',
       debugShowCheckedModeBanner: false,
-      theme: buildTheme(),
-      home: const LandingPage(),
+      theme: buildDarkTheme(),
+      home: const AdminScreen(),
     );
   }
 }

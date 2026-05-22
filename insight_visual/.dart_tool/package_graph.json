@@ -11,6 +11,8 @@
         "flutter",
         "flutter_svg",
         "google_fonts",
+        "googleapis",
+        "googleapis_auth",
         "http",
         "pointer_interceptor",
         "web"
@@ -43,6 +45,14 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "googleapis",
+      "version": "12.0.0",
+      "dependencies": [
+        "_discoveryapis_commons",
+        "http"
       ]
     },
     {
@@ -560,6 +570,45 @@
       "dependencies": [
         "meta",
         "path"
+      ]
+    },
+    {
+      "name": "googleapis_auth",
+      "version": "2.3.1",
+      "dependencies": [
+        "crypto",
+        "google_cloud",
+        "google_identity_services_web",
+        "http",
+        "http_parser",
+        "meta"
+      ]
+    },
+    {
+      "name": "google_identity_services_web",
+      "version": "0.3.3+1",
+      "dependencies": [
+        "meta",
+        "web"
+      ]
+    },
+    {
+      "name": "google_cloud",
+      "version": "0.5.0",
+      "dependencies": [
+        "collection",
+        "http",
+        "meta",
+        "stack_trace"
+      ]
+    },
+    {
+      "name": "_discoveryapis_commons",
+      "version": "1.0.7",
+      "dependencies": [
+        "http",
+        "http_parser",
+        "meta"
       ]
     }
   ],
