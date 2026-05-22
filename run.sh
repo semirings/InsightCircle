@@ -2,9 +2,9 @@
 # Dispatch to a service's run.sh, forwarding all remaining arguments.
 #
 # Usage:
-#   ./run.sh I2 <video_id>
+#   ./run.sh I2 --job-id <id> --date <YYYY-MM-DD>
 #   ./run.sh IC <query>
-#   ./run.sh II [--phase 1|2|3|all] [--job-id <id>] [--keywords '["k1","k2"]']
+#   ./run.sh II [--phase 1|2|3|all] [--job-id <id>] [--keywords '["k1","k2"]'] [--count N] [--per-keyword N]
 #   ./run.sh IS <video_id> <whisper-completion|token-completion|ontology-completion>
 #   ./run.sh IT <video_id>
 #   ./run.sh IW <video_id>          e.g. pdNYw6qwuNc

@@ -7,6 +7,7 @@ COPY insight_2ontology/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY insight_2ontology/main.py .
+COPY ic_log/ ic_log/
 COPY resources/gpc1.json resources/gpc1.json
 
 EXPOSE 8080

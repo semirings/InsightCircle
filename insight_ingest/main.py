@@ -41,12 +41,14 @@ import os
 import random
 import re
 import time
-from datetime import datetime, timezone
+import traceback
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
 import ic_log
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse  # used in _unhandled exception handler
 from google.cloud import pubsub_v1, storage
 from google.api_core.retry import Retry
 from googleapiclient.discovery import build
@@ -61,8 +63,10 @@ _INGEST_COMPLETION_TOPIC = os.environ.get("INGEST_COMPLETION_TOPIC", "")
 _GCS_BUCKET      = "insightcircle_bucket"
 _JOBS_PREFIX     = "ingest-jobs"   # intermediate: ingest-jobs/{job_id}/...
 _INGEST_PREFIX   = "ingest"        # final output: ingest/{job_id}.jsonl
-_RESULTS_PER_Q   = 250
-_API_BATCH_SIZE  = 50
+_RESULTS_PER_Q    = 50
+_API_BATCH_SIZE   = 50
+_MAX_TOTAL_VIDEOS: int = int(os.getenv("INGEST_MAX_TOTAL_VIDEOS", "500"))
+_SEARCH_LOOKBACK_DAYS: int = int(os.getenv("INGEST_SEARCH_LOOKBACK_DAYS", "90"))
 
 _COMMENTS_PER_VIDEO: int = int(os.getenv("INGEST_COMMENTS_PER_VIDEO", "100"))
 _TRANSCRIPT_LANGS: list[str] = [
@@ -161,30 +165,50 @@ def _gcs_copy(src_blob: str, dst_blob: str) -> None:
 
 # ── Phase 1 — ID collection ───────────────────────────────────────────────────
 
-def _phase1(job_id: str, keywords: list[str]) -> dict[str, str]:
+class _QuotaExceeded(Exception):
+    """Raised when the YouTube Data API quota is exhausted."""
+
+
+def _phase1(job_id: str, keywords: list[str],
+            max_results_per_q: int = _RESULTS_PER_Q,
+            max_total: int = _MAX_TOTAL_VIDEOS) -> dict[str, str]:
     youtube = _get_youtube()
     log.info("Phase 1 start", job_id=job_id, keyword_count=len(keywords))
     raw: dict[str, str] = {}
 
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=_SEARCH_LOOKBACK_DAYS)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     for i, keyword in enumerate(keywords):
+        if len(raw) >= max_total:
+            log.info("Phase 1 cap reached — stopping early",
+                     job_id=job_id, cap=max_total, total=len(raw))
+            break
         log.info("Phase 1 searching", job_id=job_id, keyword=keyword)
         added      = 0
         collected  = 0
         page_token: Optional[str] = None
 
-        while collected < _RESULTS_PER_Q:
+        while collected < max_results_per_q and len(raw) < max_total:
             kwargs: dict = dict(
                 part="snippet",
                 q=keyword,
                 type="video",
-                maxResults=min(_RESULTS_PER_Q - collected, _SEARCH_PAGE_SIZE),
+                maxResults=min(max_results_per_q - collected, _SEARCH_PAGE_SIZE),
                 relevanceLanguage="en",
+                order="date",
+                publishedAfter=published_after,
             )
             if page_token:
                 kwargs["pageToken"] = page_token
             try:
                 response = youtube.search().list(**kwargs).execute()
             except HttpError as exc:
+                if exc.resp.status == 403 and "quotaExceeded" in str(exc):
+                    log.warning("YouTube quota exceeded — aborting phase 1",
+                                job_id=job_id, keyword=keyword)
+                    raise _QuotaExceeded("YouTube Data API daily quota exhausted") from exc
                 log.warning("search.list failed", job_id=job_id, keyword=keyword, error=str(exc))
                 break
 
@@ -476,6 +500,14 @@ def _phase3(job_id: str) -> dict[str, Optional[str]]:
 app = FastAPI(title="InsightIngest", version="1.0.0")
 
 
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+    tb = traceback.format_exc()
+    print(tb, flush=True)
+    log.error("Unhandled exception", error=str(exc), traceback=tb)
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
 @app.get("/", summary="Health check")
 def health() -> dict:
     return {"status": "ok"}
@@ -492,25 +524,34 @@ async def pubsub_ingest(request: Request) -> dict:
         log.error("Malformed Pub/Sub message", error=str(exc))
         raise HTTPException(status_code=400, detail="Malformed message") from exc
 
-    phase    = payload.get("phase", "all")
-    keywords = payload.get("keywords") or _DEFAULT_KEYWORDS
+    phase             = payload.get("phase", "all")
+    keywords          = payload.get("keywords") or _DEFAULT_KEYWORDS
+    max_results_per_q = int(payload.get("max_results_per_q", _RESULTS_PER_Q))
+    max_total         = int(payload.get("max_total", _MAX_TOTAL_VIDEOS))
 
     log.info("Ingest job received", job_id=job_id, phase=phase,
-             keyword_count=len(keywords))
+             keyword_count=len(keywords), max_results_per_q=max_results_per_q,
+             max_total=max_total)
 
     raw:          Optional[dict[str, str]]         = None
     phase3_uris:  Optional[dict[str, Optional[str]]] = None
 
-    if phase in ("1", "all"):
-        raw = _phase1(job_id, keywords)
+    try:
+        if phase in ("1", "all"):
+            raw = _phase1(job_id, keywords, max_results_per_q, max_total)
 
-    if phase in ("2", "all"):
-        raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
+        if phase in ("2", "all"):
+            raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
 
-    if phase in ("3", "all"):
-        phase3_uris = _phase3(job_id)
-        if phase3_uris:
-            _publish_ingest_completion(job_id, phase3_uris)
+        if phase in ("3", "all"):
+            phase3_uris = _phase3(job_id)
+            if phase3_uris:
+                _publish_ingest_completion(job_id, phase3_uris)
+    except _QuotaExceeded as exc:
+        log.warning("YouTube quota exhausted — acking message to stop retries",
+                    job_id=job_id, error=str(exc))
+        return {"status": "quota_exceeded", "job_id": job_id,
+                "detail": "Re-run after quota resets (~08:00 UTC)"}
 
     gcs_uri         = (phase3_uris or {}).get("gcs_uri")
     comments_uri    = (phase3_uris or {}).get("comments_uri")

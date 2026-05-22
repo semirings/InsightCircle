@@ -11,6 +11,7 @@ ARG SPACY_MODEL=en_core_web_sm
 ENV SPACY_MODEL=${SPACY_MODEL}
 RUN python -m spacy download ${SPACY_MODEL}
 
+COPY ic_log/ ic_log/
 COPY main.py .
 
 EXPOSE 8080
