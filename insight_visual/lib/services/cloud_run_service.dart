@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:googleapis/run/v2.dart' as run;
 import 'package:googleapis_auth/auth_io.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/execution_status.dart';
 
@@ -18,10 +20,11 @@ class CloudRunService {
   }
 
   late final run.CloudRunApi _api;
+  late final http.Client     _httpClient;
 
   Future<void> _init() async {
-    final client = await clientViaApplicationDefaultCredentials(scopes: _scopes);
-    _api = run.CloudRunApi(client);
+    _httpClient = await clientViaApplicationDefaultCredentials(scopes: _scopes);
+    _api = run.CloudRunApi(_httpClient);
   }
 
   // Returns the execution name (projects/P/locations/L/jobs/J/executions/E).
@@ -48,6 +51,29 @@ class CloudRunService {
       if (status == ExecutionStatus.succeeded || status == ExecutionStatus.failed) break;
       await Future<void>.delayed(_pollInterval);
     }
+  }
+
+  Future<Map<String, dynamic>> callServiceEndpoint(
+    String project,
+    String region,
+    String serviceName,
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final name = 'projects/$project/locations/$region/services/$serviceName';
+    final svc  = await _api.projects.locations.services.get(name);
+    final uri  = svc.uri;
+    if (uri == null) throw Exception('Service $serviceName has no URL');
+
+    final resp = await _httpClient.post(
+      Uri.parse('$uri$path'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (resp.statusCode >= 400) {
+      throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
   ExecutionStatus _statusFromExecution(run.GoogleCloudRunV2Execution exec) {

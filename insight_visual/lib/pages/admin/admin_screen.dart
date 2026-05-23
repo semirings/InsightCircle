@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../../config/pipeline_config.dart';
@@ -5,17 +7,19 @@ import '../../models/execution_status.dart';
 import '../../models/log_entry.dart';
 import '../../models/pipeline_step.dart';
 import '../../models/step_result.dart';
+import '../../services/bigquery_service.dart';
 import '../../services/cloud_run_service.dart';
 import '../../services/history_service.dart';
 import '../../services/logging_service.dart';
+import '../../services/pubsub_service.dart';
 import '../../theme.dart';
+import '../../widgets/admin/service_cards.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const _kColLeft   = 180.0;
-const _kColRight  = 220.0;
-const _kCardH     = 88.0;
-const _kGap       = 12.0;
+const _kColLeft  = 260.0;
+const _kColRight = 220.0;
+const _kGap      = 10.0;
 
 // ── Page entry point ───────────────────────────────────────────────────────
 
@@ -27,26 +31,23 @@ class AdminScreen extends StatefulWidget {
 }
 
 class _AdminScreenState extends State<AdminScreen> {
-  // Services — lazily initialised
   CloudRunService? _cloudRun;
   HistoryService?  _history;
   LoggingService?  _logging;
+  BigQueryService? _bigQuery;
   bool _servicesReady = false;
 
-  // Per-step live status (shown in column 1 while a run is active)
-  final Map<String, ExecutionStatus> _liveStatus = {};
+  final Map<String, ExecutionStatus>       _liveStatus = {};
+  final Map<String, List<StepResult>>      _stepRuns   = {};
+  final Map<String, Map<String, String>>   _stepParams = {};
+  List<String> _bqTables = [];
 
-  // Run history per step — populated from Firestore on load + after each run
-  final Map<String, List<StepResult>> _stepRuns = {};
-
-  // Detail panel state
   StepResult? _selectedRun;
-  int _detailTab = 0;
+  int  _detailTab   = 0;
   List<LogEntry> _logs = [];
   bool _logsLoading = false;
 
-  // Run-all progress tracking
-  bool _running = false;
+  bool    _running       = false;
   String? _runFromStepId;
 
   @override
@@ -57,19 +58,22 @@ class _AdminScreenState extends State<AdminScreen> {
 
   Future<void> _initServices() async {
     try {
-      final cr = await CloudRunService.create();
-      final hs = await HistoryService.create();
-      final ls = await LoggingService.create();
+      final cr     = await CloudRunService.create();
+      final hs     = await HistoryService.create();
+      final ls     = await LoggingService.create();
+      final bq     = await BigQueryService.create();
+      final tables = await bq.listTables(kGcpProject, kBqDataset);
       if (!mounted) return;
       setState(() {
-        _cloudRun = cr;
-        _history  = hs;
-        _logging  = ls;
+        _cloudRun      = cr;
+        _history       = hs;
+        _logging       = ls;
+        _bigQuery      = bq;
+        _bqTables      = tables;
         _servicesReady = true;
       });
       await _loadHistory();
     } catch (e) {
-      // Show error in UI — services unavailable (no ADC, offline, etc.)
       if (mounted) setState(() => _servicesReady = false);
     }
   }
@@ -83,32 +87,96 @@ class _AdminScreenState extends State<AdminScreen> {
     }
   }
 
+  void _updateStepParams(String stepId, Map<String, String> params) {
+    _stepParams[stepId] = params;
+  }
+
+  // ── Dispatch ───────────────────────────────────────────────────────────
+
+  static String _newId() {
+    final r = Random.secure();
+    return '${DateTime.now().millisecondsSinceEpoch}-'
+        '${r.nextInt(0xFFFF).toRadixString(16).padLeft(4, '0')}';
+  }
+
+  Future<ExecutionStatus> _dispatchStep(
+    PipelineStep step,
+    Map<String, String> params,
+  ) async {
+    switch (step.id) {
+      case 'II':
+        await PubSubService.triggerIngest(
+          phase:    params['phase'] ?? 'all',
+          keywords: (params['keywords'] ?? '').isEmpty ? null : params['keywords'],
+          count:    int.tryParse(params['count'] ?? ''),
+        );
+        return ExecutionStatus.succeeded;
+
+      case 'I2':
+        await PubSubService.triggerOntology(
+          jobId:          (params['jobId'] ?? '').isEmpty ? _newId() : params['jobId'],
+          date:           params['date'] ?? '',
+          commentsUri:    (params['commentsUri'] ?? '').isEmpty ? null : params['commentsUri'],
+          transcriptsUri: (params['transcriptsUri'] ?? '').isEmpty ? null : params['transcriptsUri'],
+        );
+        return ExecutionStatus.succeeded;
+
+      case 'IT':
+        await PubSubService.triggerToken(params['videoId'] ?? '');
+        return ExecutionStatus.succeeded;
+
+      case 'IC':
+        await _cloudRun!.callServiceEndpoint(
+          kGcpProject, kRegion, kCalcService,
+          '/query/yt_metadata',
+          {'query': (params['query'] ?? '').isEmpty ? ':' : params['query']!},
+        );
+        return ExecutionStatus.succeeded;
+
+      case 'IS':
+        final table = params['table'] ?? '';
+        if (table.isNotEmpty) {
+          await _bigQuery!.fetchTablePreview(kGcpProject, kBqDataset, table);
+        }
+        return ExecutionStatus.succeeded;
+
+      case 'IW':
+        await PubSubService.triggerWhisper(params['videoId'] ?? '');
+        return ExecutionStatus.succeeded;
+
+      default:
+        throw Exception('Unknown step: ${step.id}');
+    }
+  }
+
   // ── Run logic ──────────────────────────────────────────────────────────
 
-  Future<void> _runSingle(PipelineStep step) => _runSequence([step]);
+  Future<void> _runSingleWithParams(
+      PipelineStep step, Map<String, String> params) {
+    _stepParams[step.id] = params;
+    return _runSequence([step]);
+  }
 
-  Future<void> _runAll()          => _runSequence(kPipelineSteps.toList());
+  Future<void> _runAll() => _runSequence(kPipelineSteps.toList());
+
   Future<void> _runFromStep(String stepId) {
     final idx = kPipelineSteps.indexWhere((s) => s.id == stepId);
     return _runSequence(kPipelineSteps.skip(idx < 0 ? 0 : idx).toList());
   }
 
   Future<void> _runSequence(List<PipelineStep> steps) async {
-    if (_running || _cloudRun == null) return;
+    if (_running) return;
     setState(() => _running = true);
 
     for (final step in steps) {
       setState(() => _liveStatus[step.id] = ExecutionStatus.running);
       try {
-        final execId = await _cloudRun!.triggerExecution(step.jobName, step.region);
-        ExecutionStatus finalStatus = ExecutionStatus.running;
-        await for (final s in _cloudRun!.watchExecution(execId)) {
-          if (mounted) setState(() => _liveStatus[step.id] = s);
-          finalStatus = s;
-        }
-        if (finalStatus != ExecutionStatus.succeeded) {
-          // Mark remaining steps as blocked and stop
-          for (final rem in steps.skipWhile((s) => s.id != step.id).skip(1)) {
+        final params = _stepParams[step.id] ?? {};
+        final status = await _dispatchStep(step, params);
+        setState(() => _liveStatus[step.id] = status);
+        if (status != ExecutionStatus.succeeded) {
+          for (final rem
+              in steps.skipWhile((s) => s.id != step.id).skip(1)) {
             setState(() => _liveStatus[rem.id] = ExecutionStatus.blocked);
           }
           break;
@@ -169,13 +237,15 @@ class _AdminScreenState extends State<AdminScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Column 1 — pipeline steps
+                // Column 1 — service-specific cards
                 SizedBox(
                   width: _kColLeft,
-                  child: _StepColumn(
+                  child: _ServiceCardColumn(
                     steps: kPipelineSteps.toList(),
                     liveStatus: _liveStatus,
-                    onRun: _runSingle,
+                    bqTables: _bqTables,
+                    onRun: _runSingleWithParams,
+                    onParamsChanged: _updateStepParams,
                   ),
                 ),
                 // Column 2 — run history
@@ -244,7 +314,8 @@ class _Toolbar extends StatelessWidget {
         children: [
           Text(
             'PIPELINE',
-            style: spaceGrotesk(fontSize: 13, color: kAdminText, letterSpacing: 1),
+            style: spaceGrotesk(
+                fontSize: 13, color: kAdminText, letterSpacing: 1),
           ),
           const SizedBox(width: 24),
           _ToolbarButton(
@@ -258,17 +329,15 @@ class _Toolbar extends StatelessWidget {
             label: 'Run from Step',
             icon: Icons.skip_next,
             enabled: enabled && runFromStepId != null,
-            onTap: runFromStepId != null ? () => onRunFrom(runFromStepId!) : null,
+            onTap:
+                runFromStepId != null ? () => onRunFrom(runFromStepId!) : null,
           ),
           const SizedBox(width: 8),
-          // Step picker for "run from"
           DropdownButtonHideUnderline(
             child: DropdownButton<String>(
               value: runFromStepId,
-              hint: Text(
-                'pick step…',
-                style: inter(fontSize: 11, color: kAdminTextDim),
-              ),
+              hint: Text('pick step…',
+                  style: inter(fontSize: 11, color: kAdminTextDim)),
               dropdownColor: kAdminSurface,
               iconEnabledColor: kAdminTextDim,
               style: inter(fontSize: 11, color: kAdminText),
@@ -287,18 +356,15 @@ class _Toolbar extends StatelessWidget {
               width: 14,
               height: 14,
               child: CircularProgressIndicator(
-                strokeWidth: 1.5,
-                color: kAdminAccent,
-              ),
+                  strokeWidth: 1.5, color: kAdminAccent),
             ),
             const SizedBox(width: 8),
-            Text('running…', style: inter(fontSize: 11, color: kAdminTextMuted)),
+            Text('running…',
+                style: inter(fontSize: 11, color: kAdminTextMuted)),
           ],
           if (!servicesReady)
-            Text(
-              'services unavailable',
-              style: inter(fontSize: 11, color: kAdminAccent),
-            ),
+            Text('services unavailable',
+                style: inter(fontSize: 11, color: kAdminAccent)),
         ],
       ),
     );
@@ -339,9 +405,8 @@ class _ToolbarButtonState extends State<_ToolbarButton> {
         onTap: widget.enabled ? widget.onTap : null,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            border: Border.all(color: fg.withValues(alpha: 0.4)),
-          ),
+          decoration:
+              BoxDecoration(border: Border.all(color: fg.withValues(alpha: 0.4))),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -356,18 +421,67 @@ class _ToolbarButtonState extends State<_ToolbarButton> {
   }
 }
 
-// ── Column 1 — Step list ───────────────────────────────────────────────────
+// ── Column 1 — service-specific cards ─────────────────────────────────────
 
-class _StepColumn extends StatelessWidget {
+class _ServiceCardColumn extends StatelessWidget {
   final List<PipelineStep> steps;
   final Map<String, ExecutionStatus> liveStatus;
-  final void Function(PipelineStep) onRun;
+  final List<String> bqTables;
+  final void Function(PipelineStep, Map<String, String>) onRun;
+  final void Function(String, Map<String, String>) onParamsChanged;
 
-  const _StepColumn({
+  const _ServiceCardColumn({
     required this.steps,
     required this.liveStatus,
+    required this.bqTables,
     required this.onRun,
+    required this.onParamsChanged,
   });
+
+  Widget _cardForStep(PipelineStep step) {
+    final running = liveStatus[step.id] == ExecutionStatus.running;
+    switch (step.id) {
+      case 'II':
+        return IICard(
+          running: running,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      case 'I2':
+        return I2Card(
+          running: running,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      case 'IT':
+        return ITCard(
+          running: running,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      case 'IC':
+        return ICCard(
+          running: running,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      case 'IS':
+        return ISCard(
+          running: running,
+          tables: bqTables,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      case 'IW':
+        return IWCard(
+          running: running,
+          onRun: (p) => onRun(step, p),
+          onParamsChanged: (p) => onParamsChanged(step.id, p),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -378,156 +492,17 @@ class _StepColumn extends StatelessWidget {
         child: Column(
           children: [
             for (int i = 0; i < steps.length; i++) ...[
-              _StepCard(
-                step: steps[i],
-                status: liveStatus[steps[i].id] ?? ExecutionStatus.pending,
-                onRun: () => onRun(steps[i]),
-              ),
+              _cardForStep(steps[i]),
               if (i < steps.length - 1)
                 Center(
                   child: Container(
                     width: 1,
-                    height: _kGap + 4,
+                    height: _kGap,
                     color: kAdminBorderMid,
                   ),
                 ),
             ],
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StepCard extends StatelessWidget {
-  final PipelineStep step;
-  final ExecutionStatus status;
-  final VoidCallback onRun;
-
-  const _StepCard({
-    required this.step,
-    required this.status,
-    required this.onRun,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: _kCardH,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: kAdminSurface,
-        border: Border.all(color: kAdminBorder),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  step.name,
-                  style: spaceGrotesk(fontSize: 12, color: kAdminText),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              _StatusBadge(status),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            step.serviceType,
-            style: inter(fontSize: 10, color: kAdminTextMuted),
-            overflow: TextOverflow.ellipsis,
-          ),
-          const Spacer(),
-          Align(
-            alignment: Alignment.centerRight,
-            child: _RunButton(onTap: onRun),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StatusBadge extends StatelessWidget {
-  final ExecutionStatus status;
-  const _StatusBadge(this.status);
-
-  static const _labels = {
-    ExecutionStatus.pending:   'pending',
-    ExecutionStatus.running:   'running',
-    ExecutionStatus.succeeded: 'done',
-    ExecutionStatus.failed:    'failed',
-    ExecutionStatus.blocked:   'blocked',
-  };
-  static const _colors = {
-    ExecutionStatus.pending:   kAdminTextDim,
-    ExecutionStatus.running:   kAdminBlue,
-    ExecutionStatus.succeeded: kAdminGreen,
-    ExecutionStatus.failed:    kAdminAccent,
-    ExecutionStatus.blocked:   kAdminTextDim,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final color = _colors[status] ?? kAdminTextDim;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Text(
-        _labels[status] ?? '',
-        style: inter(fontSize: 9, fontWeight: FontWeight.w700, color: color),
-      ),
-    );
-  }
-}
-
-class _RunButton extends StatefulWidget {
-  final VoidCallback onTap;
-  const _RunButton({required this.onTap});
-
-  @override
-  State<_RunButton> createState() => _RunButtonState();
-}
-
-class _RunButtonState extends State<_RunButton> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit:  (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: _hovered ? kAdminBorderMid : kAdminSurfaceLow,
-            border: Border.all(color: kAdminBorder),
-            borderRadius: BorderRadius.circular(3),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.play_arrow,
-                  size: 12, color: _hovered ? kAdminText : kAdminTextMuted),
-              const SizedBox(width: 2),
-              Text(
-                'run',
-                style: inter(
-                    fontSize: 10,
-                    color: _hovered ? kAdminText : kAdminTextMuted),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -554,18 +529,30 @@ class _HistoryColumn extends StatelessWidget {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (int i = 0; i < steps.length; i++) ...[
+          for (final step in steps) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                step.id,
+                style: inter(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  color: kAdminTextDim,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
             SizedBox(
-              height: _kCardH,
+              height: 80,
               child: _RunRow(
-                runs: stepRuns[steps[i].id] ?? [],
+                runs: stepRuns[step.id] ?? [],
                 selectedRun: selectedRun,
                 onSelectRun: onSelectRun,
               ),
             ),
-            if (i < steps.length - 1)
-              const SizedBox(height: _kGap + 4),
+            const SizedBox(height: _kGap + 6),
           ],
         ],
       ),
@@ -589,10 +576,8 @@ class _RunRow extends StatelessWidget {
     if (runs.isEmpty) {
       return Align(
         alignment: Alignment.centerLeft,
-        child: Text(
-          'no runs yet',
-          style: inter(fontSize: 11, color: kAdminTextDim),
-        ),
+        child: Text('no runs yet',
+            style: inter(fontSize: 11, color: kAdminTextDim)),
       );
     }
     return ListView.separated(
@@ -600,7 +585,7 @@ class _RunRow extends StatelessWidget {
       itemCount: runs.length,
       separatorBuilder: (_, _) => const SizedBox(width: 8),
       itemBuilder: (_, i) {
-        final run = runs[i];
+        final run      = runs[i];
         final selected = selectedRun?.executionId == run.executionId;
         return _RunCard(
           run: run,
@@ -616,7 +601,8 @@ class _RunCard extends StatefulWidget {
   final StepResult run;
   final bool selected;
   final VoidCallback onTap;
-  const _RunCard({required this.run, required this.selected, required this.onTap});
+  const _RunCard(
+      {required this.run, required this.selected, required this.onTap});
 
   @override
   State<_RunCard> createState() => _RunCardState();
@@ -627,11 +613,11 @@ class _RunCardState extends State<_RunCard> {
 
   String _summary() {
     final r = widget.run;
-    if (r.status == ExecutionStatus.failed) {
-      return r.errorMessage ?? 'error';
-    }
+    if (r.status == ExecutionStatus.failed) return r.errorMessage ?? 'error';
     if (r.rowCount != null) return '${r.rowCount} rows';
-    if (r.byteCount != null) return '${(r.byteCount! / 1024).toStringAsFixed(1)} KB';
+    if (r.byteCount != null) {
+      return '${(r.byteCount! / 1024).toStringAsFixed(1)} KB';
+    }
     return r.status.name;
   }
 
@@ -644,7 +630,7 @@ class _RunCardState extends State<_RunCard> {
 
   @override
   Widget build(BuildContext context) {
-    final success = widget.run.status == ExecutionStatus.succeeded;
+    final success    = widget.run.status == ExecutionStatus.succeeded;
     final accentBorder = success ? kAdminGreen : kAdminAccent;
 
     return MouseRegion(
@@ -671,21 +657,15 @@ class _RunCardState extends State<_RunCard> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                _ts(widget.run.startedAt),
-                style: inter(fontSize: 9, color: kAdminTextMuted),
-              ),
+              Text(_ts(widget.run.startedAt),
+                  style: inter(fontSize: 9, color: kAdminTextMuted)),
               const SizedBox(height: 3),
-              Text(
-                _duration(),
-                style: spaceGrotesk(fontSize: 13, color: kAdminText),
-              ),
+              Text(_duration(),
+                  style: spaceGrotesk(fontSize: 13, color: kAdminText)),
               const Spacer(),
-              Text(
-                _summary(),
-                style: inter(fontSize: 10, color: kAdminTextMuted),
-                overflow: TextOverflow.ellipsis,
-              ),
+              Text(_summary(),
+                  style: inter(fontSize: 10, color: kAdminTextMuted),
+                  overflow: TextOverflow.ellipsis),
             ],
           ),
         ),
@@ -697,8 +677,7 @@ class _RunCardState extends State<_RunCard> {
     final local = dt.toLocal();
     final h = local.hour.toString().padLeft(2, '0');
     final m = local.minute.toString().padLeft(2, '0');
-    final d = '${local.month}/${local.day}';
-    return '$d $h:$m';
+    return '${local.month}/${local.day} $h:$m';
   }
 }
 
@@ -732,7 +711,6 @@ class _DetailPanel extends StatelessWidget {
       ),
       child: Column(
         children: [
-          // Header
           Container(
             height: 40,
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -755,13 +733,13 @@ class _DetailPanel extends StatelessWidget {
                   onTap: onClose,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
-                    child: const Icon(Icons.close, size: 14, color: kAdminTextDim),
+                    child: const Icon(Icons.close,
+                        size: 14, color: kAdminTextDim),
                   ),
                 ),
               ],
             ),
           ),
-          // Body
           Expanded(
             child: switch (activeTab) {
               0 => _ResultsTab(run: run),
@@ -779,7 +757,8 @@ class _DetailTab extends StatefulWidget {
   final String label;
   final bool active;
   final VoidCallback onTap;
-  const _DetailTab({required this.label, required this.active, required this.onTap});
+  const _DetailTab(
+      {required this.label, required this.active, required this.onTap});
 
   @override
   State<_DetailTab> createState() => _DetailTabState();
@@ -790,7 +769,9 @@ class _DetailTabState extends State<_DetailTab> {
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.active ? kAdminText : (_hovered ? kAdminTextMuted : kAdminTextDim);
+    final color = widget.active
+        ? kAdminText
+        : (_hovered ? kAdminTextMuted : kAdminTextDim);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hovered = true),
@@ -801,13 +782,15 @@ class _DetailTabState extends State<_DetailTab> {
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           decoration: widget.active
               ? const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: kAdminText, width: 2)))
+                  border: Border(
+                      bottom: BorderSide(color: kAdminText, width: 2)))
               : null,
           child: Text(
             widget.label,
             style: inter(
               fontSize: 10,
-              fontWeight: widget.active ? FontWeight.w700 : FontWeight.w400,
+              fontWeight:
+                  widget.active ? FontWeight.w700 : FontWeight.w400,
               color: color,
             ),
           ),
@@ -830,13 +813,13 @@ class _ResultsTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (run.rowCount != null)
-            _KV('Rows', '${run.rowCount}'),
-          if (run.byteCount != null)
-            _KV('Bytes', '${run.byteCount}'),
+          if (run.rowCount != null) _KV('Rows', '${run.rowCount}'),
+          if (run.byteCount != null) _KV('Bytes', '${run.byteCount}'),
           if (run.errorMessage != null)
             _KV('Error', run.errorMessage!, valueColor: kAdminAccent),
-          if (run.rowCount == null && run.byteCount == null && run.errorMessage == null)
+          if (run.rowCount == null &&
+              run.byteCount == null &&
+              run.errorMessage == null)
             Text('No result data recorded.',
                 style: inter(fontSize: 11, color: kAdminTextDim)),
         ],
@@ -861,13 +844,14 @@ class _LogsTab extends StatelessWidget {
     }
     if (logs.isEmpty) {
       return Center(
-          child: Text('No logs.', style: inter(fontSize: 11, color: kAdminTextDim)));
+          child:
+              Text('No logs.', style: inter(fontSize: 11, color: kAdminTextDim)));
     }
     return ListView.builder(
       padding: const EdgeInsets.all(8),
       itemCount: logs.length,
       itemBuilder: (_, i) {
-        final e = logs[i];
+        final e  = logs[i];
         final ts = '${e.timestamp.toLocal().hour.toString().padLeft(2, '0')}'
             ':${e.timestamp.toLocal().minute.toString().padLeft(2, '0')}'
             ':${e.timestamp.toLocal().second.toString().padLeft(2, '0')}';
@@ -883,7 +867,8 @@ class _LogsTab extends StatelessWidget {
                 TextSpan(
                   text: e.message,
                   style: TextStyle(
-                    color: e.severity == 'ERROR' ? kAdminAccent : kAdminText,
+                    color:
+                        e.severity == 'ERROR' ? kAdminAccent : kAdminText,
                   ),
                 ),
               ],
@@ -913,8 +898,7 @@ class _InfoTab extends StatelessWidget {
           _KV('Started', run.startedAt.toLocal().toString()),
           if (run.completedAt != null)
             _KV('Completed', run.completedAt!.toLocal().toString()),
-          if (dur != null)
-            _KV('Duration', '${dur.inSeconds}s'),
+          if (dur != null) _KV('Duration', '${dur.inSeconds}s'),
         ],
       ),
     );
@@ -942,9 +926,7 @@ class _KV extends StatelessWidget {
                   letterSpacing: 0.8)),
           const SizedBox(height: 2),
           Text(value,
-              style: inter(
-                  fontSize: 11,
-                  color: valueColor ?? kAdminText)),
+              style: inter(fontSize: 11, color: valueColor ?? kAdminText)),
         ],
       ),
     );

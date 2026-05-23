@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import '../config/pipeline_config.dart';
 
@@ -20,15 +21,22 @@ class PubSubService {
 
   // ── Per-service message builders ─────────────────────────────────────────
 
+  static String _newId() {
+    final r = Random.secure();
+    return '${DateTime.now().millisecondsSinceEpoch}-'
+        '${r.nextInt(0xFFFF).toRadixString(16).padLeft(4, '0')}';
+  }
+
   static Future<void> triggerIngest({
-    required String jobId,
+    String? jobId,
     String phase = 'all',
     String? keywords,
     int? count,
     int? perKeyword,
   }) async {
+    final id = jobId ?? _newId();
     final payload = <String, dynamic>{
-      'job_id': jobId,
+      'job_id': id,
       'phase': phase,
       if (keywords != null && keywords.isNotEmpty) 'keywords': jsonDecode(keywords),
       'max_total': ?count,
@@ -38,15 +46,16 @@ class PubSubService {
   }
 
   static Future<void> triggerOntology({
-    required String jobId,
+    String? jobId,
     required String date,
     String? metaUri,
     String? commentsUri,
     String? transcriptsUri,
   }) async {
-    String meta = metaUri ?? 'gs://$kGcsBucket/ingest/$date/${jobId}_meta.jsonl';
+    final id  = jobId ?? _newId();
+    final meta = metaUri ?? 'gs://$kGcsBucket/ingest/$date/${id}_meta.jsonl';
     final payload = <String, dynamic>{
-      'job_id': jobId,
+      'job_id': id,
       'gcs_uri': meta,
       if (commentsUri != null && commentsUri.isNotEmpty)
         'comments_uri': commentsUri,
