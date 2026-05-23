@@ -162,4 +162,13 @@ def _tokenize(video_id: str) -> dict:
 
 @app.post("/tokenize", summary="Tokenize a narrative transcript stored in GCS")
 def tokenize(video_id: str) -> dict:
-    return _tokenize(video_id)
+    try:
+        result = _tokenize(video_id)
+    except HTTPException:
+        _publish_completion(video_id, "failed", 0, "")
+        raise
+    except Exception as exc:
+        _publish_completion(video_id, "failed", 0, "")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _publish_completion(video_id, "completed", result["token_count"], result["gcs_out"])
+    return result
