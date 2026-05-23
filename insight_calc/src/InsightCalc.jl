@@ -17,13 +17,49 @@ include("automata.jl")
 include("algebra.jl")
 include("pubsub.jl")
 
-export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, InsightPayload, publish, queryVideo
+export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, queryVideo, publishCompletion
 
 const START_TIME = Ref{DateTime}(now())
 
+# ── Completion middleware ─────────────────────────────────────────────────────
+#
+# Fires publishCompletion for every POST request automatically.
+# Row count is extracted from the response body when a "rows" key is present.
+# Error status is published when the handler throws instead of returning.
+
+function _completionMiddleware(handle)
+    function(req::HTTP.Request)
+        req.method == "POST" || return handle(req)
+
+        script = first(split(lstrip(req.target, '/'), '?'))
+        t0     = now()
+
+        local resp
+        try
+            resp = handle(req)
+        catch err
+            elapsed = round(Int, (now() - t0).value)
+            publishCompletion(script, "error";
+                duration_ms = elapsed,
+                detail      = string(err))
+            rethrow()
+        end
+
+        elapsed   = round(Int, (now() - t0).value)
+        row_count = 0
+        try
+            parsed = JSON3.read(resp.body)
+            haskey(parsed, :rows) && (row_count = length(parsed.rows))
+        catch
+        end
+        publishCompletion(script, "ok"; row_count, duration_ms=elapsed)
+        return resp
+    end
+end
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@get "/health" function(_req::HTTP.Request)
+@get "/health" function(::HTTP.Request)
     uptimeS = round(Int, (now() - START_TIME[]).value / 1_000)
     return json(Dict(
         "status"  => "ok",
@@ -32,7 +68,7 @@ const START_TIME = Ref{DateTime}(now())
     ))
 end
 
-@get "/tables" function(_req::HTTP.Request)
+@get "/tables" function(::HTTP.Request)
     tables = listTables()
     return json(Dict("tables" => tables, "count" => length(tables)))
 end
@@ -40,7 +76,7 @@ end
 @post "/query/yt_metadata" function(req::HTTP.Request)
     body = JSON3.read(req.body)
     haskey(body, :query) || return json(Dict("error" => "missing query"), status=400)
-    aa     = queryYtMetadata(string(body.query))
+    aa = queryYtMetadata(string(body.query))
     rows, cols, vals = find(aa)
     return json(Dict("rows" => rows, "cols" => cols, "vals" => vals))
 end
@@ -51,8 +87,8 @@ end
     haskey(body, :query) || return json(Dict("error" => "missing query"), status=400)
     tableName = string(body.table)
     d4mQuery  = string(body.query)
-    rowKeyCol = haskey(body, :row_key)    ? string(body.row_key)           : "id"
-    chunkSize = haskey(body, :chunk_size) ? Int(body.chunk_size)           : 10_000
+    rowKeyCol = haskey(body, :row_key)    ? string(body.row_key)  : "id"
+    chunkSize = haskey(body, :chunk_size) ? Int(body.chunk_size)  : 10_000
     aa, jobId, pageToken = queryTableChunk(tableName, d4mQuery; rowKeyCol, chunkSize)
     rows, cols, vals = find(aa)
     return json(Dict("rows" => rows, "cols" => cols, "vals" => vals,
@@ -75,7 +111,8 @@ end
 end
 
 function main()
-    Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")))
+    Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")),
+                 middleware=[_completionMiddleware])
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

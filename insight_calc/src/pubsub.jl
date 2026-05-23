@@ -1,40 +1,69 @@
-# pubsub.jl — Publish InsightPayload messages to Google Pub/Sub.
+# pubsub.jl — Publish CalcCompletion events to Google Pub/Sub.
+#
+# Every IC route calls publishCompletion() when it finishes (success or error).
+# The event is picked up by InsightStore and written to pipeline_events in BQ.
+#
+# Required env var:
+#   CALC_COMPLETION_TOPIC  — short topic name, e.g. "calc-completion"
 
 using Base64
+using Dates
 using JSON3
 using StructTypes
 
 const _PUBSUB_BASE = "https://pubsub.googleapis.com/v1"
 
-struct InsightPayload
-    video_id      :: String
-    gcs_uri       :: String
-    d4m_score     :: Float64
-    anchors       :: Vector{Float64}  # Timestamps for IW to focus on
-    is_high_value :: Bool
+struct CalcCompletion
+    script      :: String   # route identifier, e.g. "query/yt_metadata"
+    status      :: String   # "ok" | "error"
+    row_count   :: Int
+    duration_ms :: Int
+    timestamp   :: String   # ISO-8601 UTC
+    detail      :: String   # error message or empty
 end
 
-StructTypes.StructType(::Type{InsightPayload}) = StructTypes.Struct()
+StructTypes.StructType(::Type{CalcCompletion}) = StructTypes.Struct()
 
 """
-    publish(msg::InsightPayload; topic::String = ENV["PUBSUB_TOPIC"]) -> String
+    publishCompletion(script, status; row_count, duration_ms, detail)
 
-Serialize `msg` as JSON, base64-encode it, and publish it as a single Pub/Sub
-message to `projects/{BQ_PROJECT}/topics/{topic}`.
-Returns the Pub/Sub message ID on success.
+Publish a CalcCompletion event to CALC_COMPLETION_TOPIC.
+Failures are logged and swallowed so a Pub/Sub outage never breaks a route.
 """
-function publish(msg::InsightPayload; topic::String = get(ENV, "PUBSUB_TOPIC", ""))
-    isempty(topic) && error("Set PUBSUB_TOPIC in .env or pass topic= keyword")
+function publishCompletion(
+    script      :: String,
+    status      :: String;
+    row_count   :: Int    = 0,
+    duration_ms :: Int    = 0,
+    detail      :: String = "",
+)
+    topic = get(ENV, "CALC_COMPLETION_TOPIC", "")
+    if isempty(topic)
+        @warn "[publishCompletion] CALC_COMPLETION_TOPIC not set — skipping" script=script
+        return
+    end
 
-    srv     = getServer()
-    fqTopic = "projects/$(srv.project)/topics/$topic"
-    url     = "$_PUBSUB_BASE/$fqTopic:publish"
+    try
+        srv     = getServer()
+        fqTopic = "projects/$(srv.project)/topics/$topic"
+        url     = "$_PUBSUB_BASE/$fqTopic:publish"
 
-    encoded = base64encode(JSON3.write(msg))
-    body    = JSON3.write(Dict("messages" => [Dict("data" => encoded)]))
-    resp    = HTTP.post(url, _authHeaders(srv.session), body)
+        msg = CalcCompletion(
+            script,
+            status,
+            row_count,
+            duration_ms,
+            Dates.format(now(Dates.UTC), dateformat"yyyy-mm-ddTHH:MM:SSZ"),
+            detail,
+        )
 
-    msgId = String(first(JSON3.read(resp.body).messageIds))
-    @info "[publish] InsightPayload published" topic=topic video_id=msg.video_id messageId=msgId
-    return msgId
+        encoded = base64encode(JSON3.write(msg))
+        body    = JSON3.write(Dict("messages" => [Dict("data" => encoded)]))
+        resp    = HTTP.post(url, _authHeaders(srv.session), body)
+
+        msgId = String(first(JSON3.read(resp.body).messageIds))
+        @info "[publishCompletion] published" script=script status=status messageId=msgId
+    catch err
+        @error "[publishCompletion] failed — continuing" script=script error=string(err)
+    end
 end

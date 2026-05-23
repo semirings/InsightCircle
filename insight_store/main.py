@@ -132,7 +132,7 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-_KNOWN_EVENT_TYPES = {"whisper-completion", "token-completion", "ontology-completion"}
+_KNOWN_EVENT_TYPES = {"whisper-completion", "token-completion", "ontology-completion", "calc-completion"}
 
 
 @app.post("/pubsub/completion/{event_type}", summary="Receive pipeline completion event and store in BQ")
