@@ -1,16 +1,23 @@
 """InsightStore – FastAPI microservice.
 
 Endpoints:
-  GET  /ingest_files      – list files in gs://insightcircle_bucket/ingest/
-  GET  /metadata/tables   – list BQ tables in the insight_metadata dataset
+  GET  /ingest_files           – list files in gs://insightcircle_bucket/ingest/
+  GET  /metadata/tables        – list BQ tables in the insight_metadata dataset
 
-Push subscriptions:
-  POST /pubsub/whisper-completion   – store whisper_completion events in BQ
-  POST /pubsub/token-completion     – store token_completion events in BQ
-  POST /pubsub/ontology-completion  – store ontology_completion events in BQ
+Push subscriptions (all three topics push to the same endpoint):
+  POST /pubsub/completion/{event_type}
+       event_type: whisper-completion | token-completion | ontology-completion
+       Writes one row to pipeline_events with the full payload stored as JSON.
 
 Background pull:
   aa-ingest-sub – writes incoming AA payloads to the BQ table named in each message.
+
+BQ table required (insight_metadata.pipeline_events):
+  video_id    STRING    NOT NULL
+  event_type  STRING    NOT NULL
+  status      STRING
+  timestamp   TIMESTAMP
+  payload     STRING             -- full message JSON for event-specific fields
 """
 
 import base64
@@ -125,8 +132,14 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/pubsub/whisper-completion", summary="Receive whisper_completion event and store in BQ")
-async def pubsub_whisper_completion(request: Request) -> dict:
+_KNOWN_EVENT_TYPES = {"whisper-completion", "token-completion", "ontology-completion"}
+
+
+@app.post("/pubsub/completion/{event_type}", summary="Receive pipeline completion event and store in BQ")
+async def pubsub_completion(event_type: str, request: Request) -> dict:
+    if event_type not in _KNOWN_EVENT_TYPES:
+        raise HTTPException(status_code=404, detail=f"Unknown event type: {event_type}")
+
     envelope = await request.json()
     try:
         data     = base64.b64decode(envelope["message"]["data"])
@@ -137,74 +150,19 @@ async def pubsub_whisper_completion(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Malformed message") from exc
 
     row = {
-        "video_id":    payload["video_id"],
-        "status":      payload["status"],
-        "bucket":      payload["bucket"],
-        "output_path": payload["output_path"],
-        "timestamp":   payload["timestamp"],
+        "video_id":   video_id,
+        "event_type": event_type,
+        "status":     payload.get("status"),
+        "timestamp":  payload.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        "payload":    json.dumps(payload),
     }
-    errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.whisper_completion", [row])
+    errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.pipeline_events", [row])
     if errors:
-        log.error("BQ insert errors for whisper_completion: %s", errors)
+        log.error("BQ insert errors for pipeline_events event_type=%s: %s", event_type, errors)
         raise HTTPException(status_code=500, detail=str(errors))
 
-    log.info("Stored whisper_completion for video_id=%s (status=%s)", video_id, payload["status"])
-    return {"status": "ok", "video_id": video_id}
-
-
-@app.post("/pubsub/token-completion", summary="Receive token_completion event and store in BQ")
-async def pubsub_token_completion(request: Request) -> dict:
-    envelope = await request.json()
-    try:
-        data     = base64.b64decode(envelope["message"]["data"])
-        payload  = json.loads(data)
-        video_id = payload["video_id"]
-    except Exception as exc:
-        log.error("Malformed Pub/Sub push message: %s", exc)
-        raise HTTPException(status_code=400, detail="Malformed message") from exc
-
-    row = {
-        "video_id":    payload["video_id"],
-        "status":      payload["status"],
-        "token_count": payload["token_count"],
-        "gcs_out":     payload["gcs_out"],
-        "timestamp":   payload["timestamp"],
-    }
-    errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.token_completion", [row])
-    if errors:
-        log.error("BQ insert errors for token_completion: %s", errors)
-        raise HTTPException(status_code=500, detail=str(errors))
-
-    log.info("Stored token_completion for video_id=%s (status=%s)", video_id, payload["status"])
-    return {"status": "ok", "video_id": video_id}
-
-
-@app.post("/pubsub/ontology-completion", summary="Receive ontology_completion event and store in BQ")
-async def pubsub_ontology_completion(request: Request) -> dict:
-    envelope = await request.json()
-    try:
-        data     = base64.b64decode(envelope["message"]["data"])
-        payload  = json.loads(data)
-        video_id = payload["video_id"]
-    except Exception as exc:
-        log.error("Malformed Pub/Sub push message: %s", exc)
-        raise HTTPException(status_code=400, detail="Malformed message") from exc
-
-    row = {
-        "video_id":    payload["video_id"],
-        "status":      payload["status"],
-        "node_count":  payload.get("node_count"),
-        "rel_count":   payload.get("rel_count"),
-        "output_path": payload.get("output_path", ""),
-        "timestamp":   payload["timestamp"],
-    }
-    errors = _bq_client.insert_rows_json(f"{_BQ_DATASET}.ontology_completion", [row])
-    if errors:
-        log.error("BQ insert errors for ontology_completion: %s", errors)
-        raise HTTPException(status_code=500, detail=str(errors))
-
-    log.info("Stored ontology_completion for video_id=%s (status=%s)", video_id, payload["status"])
-    return {"status": "ok", "video_id": video_id}
+    log.info("Stored %s for video_id=%s (status=%s)", event_type, video_id, payload.get("status"))
+    return {"status": "ok", "video_id": video_id, "event_type": event_type}
 
 
 @app.get("/ingest_files", response_model=list[str], summary="List files in ingest/")
