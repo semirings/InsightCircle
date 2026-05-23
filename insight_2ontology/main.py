@@ -1,14 +1,14 @@
 """Insight2Ontology – FastAPI microservice.
 
 Push subscriptions:
-  POST /pubsub/whisper-completion – reads narrative from GCS, produces two AA tables:
-      ontology     : free-form graph extraction (LLMGraphTransformer)
-      ontology_gpc : GPC-anchored graph extraction (LLMGraphTransformer + allowed_nodes)
+  POST /pubsub/ingest-completion – reads comments/transcripts NDJSON from GCS, produces four
+      AA tables: ontology_comments, ontology_comments_gpc, ontology_transcripts,
+      ontology_transcripts_gpc. Published to aa-ingest topic in rcvs.json format.
 
-Both tables published to aa-ingest topic in rcvs.json format:
-  { "table_name": "...", "video_id": "...", "rows": [...], "cols": [...], "vals": [...] }
+Direct endpoint:
+  POST /transform?video_id=<id> – transform a single video's narrative from GCS.
 
-Also publishes an ontology_completion event after processing.
+Both paths publish an ontology_completion event on success and failure.
 Note: tokens AA is published by InsightToken directly.
 """
 
@@ -211,50 +211,20 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/pubsub/whisper-completion",
-          summary="Transform narrative to ontology and ontology_gpc AAs")
-async def pubsub_whisper_completion(request: Request) -> dict:
-    log.info("REQUEST: /pubsub/whisper-completion received")
-    envelope = await request.json()
-    try:
-        data     = base64.b64decode(envelope["message"]["data"])
-        payload  = json.loads(data)
-        video_id = payload["video_id"]
-        status   = payload["status"]
-    except Exception as exc:
-        log.error("PARSE ERROR: malformed message: %s | envelope=%s", exc, str(envelope)[:200])
-        raise HTTPException(status_code=400, detail="Malformed message") from exc
-
-    log.info("REQUEST: video_id=%s status=%s", video_id, status)
-
-    if status != "completed":
-        log.info("SKIP: video_id=%s status=%s (not completed)", video_id, status)
-        return {"status": "skipped", "video_id": video_id}
-
-    t0 = time.monotonic()
-    try:
-        result = _process_narrative(video_id)
-    except Exception as exc:
-        elapsed = time.monotonic() - t0
-        log.error("FAILED: video_id=%s elapsed=%.1fs error=%s", video_id, elapsed, exc, exc_info=True)
-        _publish_ontology_completion(video_id, "failed", 0, 0, "")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    elapsed = time.monotonic() - t0
-    log.info("DONE: video_id=%s elapsed=%.1fs nodes=%d rels=%d path=%s",
-             video_id, elapsed, result["node_count"], result["rel_count"], result["output_path"])
-    _publish_ontology_completion(video_id, "completed",
-                                  result["node_count"], result["rel_count"],
-                                  result["output_path"])
-    return {"status": "ok", **result}
-
-
 @app.post("/transform", summary="Direct: transform narrative for a video_id")
 def transform(video_id: str) -> dict:
     log.info("REQUEST: /transform video_id=%s", video_id)
     t0 = time.monotonic()
-    result = _process_narrative(video_id)
+    try:
+        result = _process_narrative(video_id)
+    except Exception as exc:
+        log.error("FAILED: /transform video_id=%s error=%s", video_id, exc, exc_info=True)
+        _publish_ontology_completion(video_id, "failed", 0, 0, "")
+        raise
     log.info("DONE: /transform video_id=%s elapsed=%.1fs", video_id, time.monotonic() - t0)
+    _publish_ontology_completion(video_id, "completed",
+                                  result["node_count"], result["rel_count"],
+                                  result["output_path"])
     return result
 
 
@@ -274,24 +244,30 @@ async def pubsub_ingest_completion(request: Request) -> dict:
     log.info("REQUEST: ingest-completion job_id=%s", job_id)
     total_nodes = total_rels = 0
 
-    comments_uri = payload.get("comments_uri")
-    if comments_uri:
-        log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)
-        records = _load_ndjson(comments_uri)
-        texts   = _group_text_by_video(records)
-        n, r    = _process_content(job_id, texts, "ontology_comments", "ontology_comments_gpc")
-        total_nodes += n; total_rels += r
+    try:
+        comments_uri = payload.get("comments_uri")
+        if comments_uri:
+            log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)
+            records = _load_ndjson(comments_uri)
+            texts   = _group_text_by_video(records)
+            n, r    = _process_content(job_id, texts, "ontology_comments", "ontology_comments_gpc")
+            total_nodes += n; total_rels += r
 
-    transcripts_uri = payload.get("transcripts_uri")
-    if transcripts_uri:
-        log.info("Processing transcripts job_id=%s uri=%s", job_id, transcripts_uri)
-        records = _load_ndjson(transcripts_uri)
-        texts   = _group_text_by_video(records)
-        n, r    = _process_content(job_id, texts, "ontology_transcripts", "ontology_transcripts_gpc")
-        total_nodes += n; total_rels += r
+        transcripts_uri = payload.get("transcripts_uri")
+        if transcripts_uri:
+            log.info("Processing transcripts job_id=%s uri=%s", job_id, transcripts_uri)
+            records = _load_ndjson(transcripts_uri)
+            texts   = _group_text_by_video(records)
+            n, r    = _process_content(job_id, texts, "ontology_transcripts", "ontology_transcripts_gpc")
+            total_nodes += n; total_rels += r
+    except Exception as exc:
+        log.error("FAILED: ingest-completion job_id=%s error=%s", job_id, exc, exc_info=True)
+        _publish_ontology_completion(job_id, "failed", 0, 0, "")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     log.info("DONE: ingest-completion job_id=%s total_nodes=%d total_rels=%d",
              job_id, total_nodes, total_rels)
+    _publish_ontology_completion(job_id, "completed", total_nodes, total_rels, "")
     return {"status": "ok", "job_id": job_id,
             "total_nodes": total_nodes, "total_rels": total_rels}
 
