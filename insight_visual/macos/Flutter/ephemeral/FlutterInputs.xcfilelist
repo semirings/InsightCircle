@@ -113,6 +113,7 @@
 /Users/gcr/.pub-cache/hosted/pub.dev/google_fonts-6.3.3/lib/src/google_fonts_variant.dart
 /Users/gcr/.pub-cache/hosted/pub.dev/google_identity_services_web-0.3.3+1/LICENSE
 /Users/gcr/.pub-cache/hosted/pub.dev/googleapis-12.0.0/LICENSE
+/Users/gcr/.pub-cache/hosted/pub.dev/googleapis-12.0.0/lib/bigquery/v2.dart
 /Users/gcr/.pub-cache/hosted/pub.dev/googleapis-12.0.0/lib/logging/v2.dart
 /Users/gcr/.pub-cache/hosted/pub.dev/googleapis-12.0.0/lib/run/v2.dart
 /Users/gcr/.pub-cache/hosted/pub.dev/googleapis-12.0.0/lib/shared.dart
@@ -423,7 +424,7 @@
 /Users/gcr/.pub-cache/hosted/pub.dev/xdg_directories-1.1.0/lib/xdg_directories.dart
 /Users/gcr/.pub-cache/hosted/pub.dev/xml-6.6.1/LICENSE
 /Users/gcr/.pub-cache/hosted/pub.dev/yaml-3.1.3/LICENSE
-/Users/gcr/populi.Wk/InsightCircle/insight_visual/DOES_NOT_EXIST_RERUN_FOR_WILDCARD785595324
+/Users/gcr/populi.Wk/InsightCircle/insight_visual/DOES_NOT_EXIST_RERUN_FOR_WILDCARD581862036
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/assets/svg/.DS_Store
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/config/pipeline_config.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/main_admin.dart
@@ -433,10 +434,14 @@
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/models/pipeline_step.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/models/step_result.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/pages/admin/admin_screen.dart
+/Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/bigquery_service.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/cloud_run_service.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/history_service.dart
+/Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/job_id_service.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/logging_service.dart
+/Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/services/pubsub_service.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/theme.dart
+/Users/gcr/populi.Wk/InsightCircle/insight_visual/lib/widgets/admin/service_cards.dart
 /Users/gcr/populi.Wk/InsightCircle/insight_visual/pubspec.yaml
 /opt/homebrew/share/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf
 /opt/homebrew/share/flutter/bin/cache/dart-sdk/version

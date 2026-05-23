@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../services/job_id_service.dart';
 import '../../widgets/looker_embed.dart';
 
 // ── Palette (from landing.pen) ─────────────────────────────────────────────
@@ -51,8 +52,17 @@ class LandingPage extends StatefulWidget {
 }
 
 class _LandingPageState extends State<LandingPage> {
-  int? _hoveredCard;
-  int? _selectedCard;
+  int?    _hoveredCard;
+  int?    _selectedCard;
+  String? _jobId;
+
+  @override
+  void initState() {
+    super.initState();
+    JobIdService.load().then((id) {
+      if (mounted) setState(() => _jobId = id);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -88,14 +98,29 @@ class _LandingPageState extends State<LandingPage> {
       color: _kHeaderBg,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: _kCardX),
-      child: const Text(
-        'Report',
-        style: TextStyle(
-          color: _kHeaderText,
-          fontFamily: 'Inter',
-          fontSize: 24,
-          fontWeight: FontWeight.normal,
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Insight Circle Admin',
+            style: TextStyle(
+              color: _kHeaderText,
+              fontFamily: 'Inter',
+              fontSize: 20,
+              fontWeight: FontWeight.normal,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            _jobId ?? '',
+            style: const TextStyle(
+              color: Color(0xFF888888),
+              fontFamily: 'monospace',
+              fontSize: 11,
+            ),
+          ),
+        ],
       ),
     );
   }

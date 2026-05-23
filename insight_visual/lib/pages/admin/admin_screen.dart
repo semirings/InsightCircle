@@ -10,6 +10,7 @@ import '../../models/step_result.dart';
 import '../../services/bigquery_service.dart';
 import '../../services/cloud_run_service.dart';
 import '../../services/history_service.dart';
+import '../../services/job_id_service.dart';
 import '../../services/logging_service.dart';
 import '../../services/pubsub_service.dart';
 import '../../theme.dart';
@@ -40,7 +41,9 @@ class _AdminScreenState extends State<AdminScreen> {
   final Map<String, ExecutionStatus>       _liveStatus = {};
   final Map<String, List<StepResult>>      _stepRuns   = {};
   final Map<String, Map<String, String>>   _stepParams = {};
-  List<String> _bqTables = [];
+  List<String> _bqTables   = [];
+  String?      _activeJobId;
+  String?      _activeVideoId;
 
   StepResult? _selectedRun;
   int  _detailTab   = 0;
@@ -53,7 +56,13 @@ class _AdminScreenState extends State<AdminScreen> {
   @override
   void initState() {
     super.initState();
+    _loadPersistedJobId();
     _initServices();
+  }
+
+  Future<void> _loadPersistedJobId() async {
+    final id = await JobIdService.load();
+    if (mounted && id != null) setState(() => _activeJobId = id);
   }
 
   Future<void> _initServices() async {
@@ -105,11 +114,13 @@ class _AdminScreenState extends State<AdminScreen> {
   ) async {
     switch (step.id) {
       case 'II':
-        await PubSubService.triggerIngest(
+        final jobId = await PubSubService.triggerIngest(
           phase:    params['phase'] ?? 'all',
           keywords: (params['keywords'] ?? '').isEmpty ? null : params['keywords'],
           count:    int.tryParse(params['count'] ?? ''),
         );
+        setState(() => _activeJobId = jobId);
+        await JobIdService.save(jobId);
         return ExecutionStatus.succeeded;
 
       case 'I2':
@@ -141,7 +152,9 @@ class _AdminScreenState extends State<AdminScreen> {
         return ExecutionStatus.succeeded;
 
       case 'IW':
-        await PubSubService.triggerWhisper(params['videoId'] ?? '');
+        final videoId = params['videoId'] ?? '';
+        await PubSubService.triggerWhisper(videoId);
+        if (videoId.isNotEmpty) setState(() => _activeVideoId = videoId);
         return ExecutionStatus.succeeded;
 
       default:
@@ -227,6 +240,7 @@ class _AdminScreenState extends State<AdminScreen> {
             running: _running,
             servicesReady: _servicesReady,
             runFromStepId: _runFromStepId,
+            activeJobId: _activeJobId,
             steps: kPipelineSteps.toList(),
             onRunAll: _runAll,
             onRunFrom: _runFromStep,
@@ -244,6 +258,8 @@ class _AdminScreenState extends State<AdminScreen> {
                     steps: kPipelineSteps.toList(),
                     liveStatus: _liveStatus,
                     bqTables: _bqTables,
+                    activeJobId: _activeJobId,
+                    activeVideoId: _activeVideoId,
                     onRun: _runSingleWithParams,
                     onParamsChanged: _updateStepParams,
                   ),
@@ -285,6 +301,7 @@ class _Toolbar extends StatelessWidget {
   final bool running;
   final bool servicesReady;
   final String? runFromStepId;
+  final String? activeJobId;
   final List<PipelineStep> steps;
   final VoidCallback onRunAll;
   final void Function(String stepId) onRunFrom;
@@ -294,6 +311,7 @@ class _Toolbar extends StatelessWidget {
     required this.running,
     required this.servicesReady,
     required this.runFromStepId,
+    required this.activeJobId,
     required this.steps,
     required this.onRunAll,
     required this.onRunFrom,
@@ -313,7 +331,7 @@ class _Toolbar extends StatelessWidget {
       child: Row(
         children: [
           Text(
-            'PIPELINE',
+            'Insight Circle — admin',
             style: spaceGrotesk(
                 fontSize: 13, color: kAdminText, letterSpacing: 1),
           ),
@@ -351,6 +369,15 @@ class _Toolbar extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          if (activeJobId != null) ...[
+            Text('JOB',
+                style: spaceGrotesk(
+                    fontSize: 10, color: kAdminTextDim, letterSpacing: 1)),
+            const SizedBox(width: 6),
+            Text(activeJobId!,
+                style: inter(fontSize: 11, color: kAdminTextMuted)),
+            const SizedBox(width: 20),
+          ],
           if (running) ...[
             const SizedBox(
               width: 14,
@@ -427,6 +454,8 @@ class _ServiceCardColumn extends StatelessWidget {
   final List<PipelineStep> steps;
   final Map<String, ExecutionStatus> liveStatus;
   final List<String> bqTables;
+  final String? activeJobId;
+  final String? activeVideoId;
   final void Function(PipelineStep, Map<String, String>) onRun;
   final void Function(String, Map<String, String>) onParamsChanged;
 
@@ -436,6 +465,8 @@ class _ServiceCardColumn extends StatelessWidget {
     required this.bqTables,
     required this.onRun,
     required this.onParamsChanged,
+    this.activeJobId,
+    this.activeVideoId,
   });
 
   Widget _cardForStep(PipelineStep step) {
@@ -450,12 +481,14 @@ class _ServiceCardColumn extends StatelessWidget {
       case 'I2':
         return I2Card(
           running: running,
+          externalJobId: activeJobId,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
         );
       case 'IT':
         return ITCard(
           running: running,
+          externalVideoId: activeVideoId,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
         );

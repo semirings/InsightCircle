@@ -280,11 +280,13 @@ class I2Card extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
+  final String? externalJobId;
   const I2Card({
     super.key,
     required this.onRun,
     this.onParamsChanged,
     this.running = false,
+    this.externalJobId,
   });
 
   @override
@@ -305,6 +307,16 @@ class _I2CardState extends State<I2Card> {
       };
 
   void _notify() => widget.onParamsChanged?.call(_params);
+
+  @override
+  void didUpdateWidget(I2Card oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.externalJobId != null &&
+        widget.externalJobId != oldWidget.externalJobId) {
+      _jobId.text = widget.externalJobId!;
+      _notify();
+    }
+  }
 
   @override
   void dispose() {
@@ -354,11 +366,13 @@ class ITCard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
+  final String? externalVideoId;
   const ITCard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
     this.running = false,
+    this.externalVideoId,
   });
 
   @override
@@ -371,6 +385,16 @@ class _ITCardState extends State<ITCard> {
   Map<String, String> get _params => {'videoId': _videoId.text};
 
   void _notify() => widget.onParamsChanged?.call(_params);
+
+  @override
+  void didUpdateWidget(ITCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.externalVideoId != null &&
+        widget.externalVideoId != oldWidget.externalVideoId) {
+      _videoId.text = widget.externalVideoId!;
+      _notify();
+    }
+  }
 
   @override
   void dispose() {

@@ -27,7 +27,7 @@ class PubSubService {
         '${r.nextInt(0xFFFF).toRadixString(16).padLeft(4, '0')}';
   }
 
-  static Future<void> triggerIngest({
+  static Future<String> triggerIngest({
     String? jobId,
     String phase = 'all',
     String? keywords,
@@ -43,6 +43,7 @@ class PubSubService {
       'max_results_per_q': ?perKeyword,
     };
     await publish('ingest-trigger', payload);
+    return id;
   }
 
   static Future<void> triggerOntology({
