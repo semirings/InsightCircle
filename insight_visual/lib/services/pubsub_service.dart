@@ -32,15 +32,26 @@ class PubSubService {
     String phase = 'all',
     String? keywords,
     int? count,
-    int? perKeyword,
+    int? minViews,
+    int? maxViews,
+    int? minSubscribers,
+    int? maxSubscribers,
+    bool skipDuplicates = true,
   }) async {
     final id = jobId ?? _newId();
+    final kws = (keywords != null && keywords.isNotEmpty && keywords != '[]')
+        ? jsonDecode(keywords) as List
+        : null;
     final payload = <String, dynamic>{
       'job_id': id,
       'phase': phase,
-      if (keywords != null && keywords.isNotEmpty) 'keywords': jsonDecode(keywords),
+      if (kws != null && kws.isNotEmpty) 'keywords': kws,
       'max_total': ?count,
-      'max_results_per_q': ?perKeyword,
+      'min_views': ?minViews,
+      'max_views': ?maxViews,
+      'min_subscribers': ?minSubscribers,
+      'max_subscribers': ?maxSubscribers,
+      if (skipDuplicates) 'skip_duplicates': true,
     };
     await publish('ingest-trigger', payload);
     return id;

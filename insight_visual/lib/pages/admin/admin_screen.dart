@@ -115,9 +115,14 @@ class _AdminScreenState extends State<AdminScreen> {
     switch (step.id) {
       case 'II':
         final jobId = await PubSubService.triggerIngest(
-          phase:    params['phase'] ?? 'all',
-          keywords: (params['keywords'] ?? '').isEmpty ? null : params['keywords'],
-          count:    int.tryParse(params['count'] ?? ''),
+          phase:           params['phase'] ?? 'all',
+          keywords:        (params['keywords'] ?? '').isEmpty ? null : params['keywords'],
+          count:           int.tryParse(params['count'] ?? ''),
+          minViews:        int.tryParse(params['minViews'] ?? ''),
+          maxViews:        int.tryParse(params['maxViews'] ?? ''),
+          minSubscribers:  int.tryParse(params['minSubscribers'] ?? ''),
+          maxSubscribers:  int.tryParse(params['maxSubscribers'] ?? ''),
+          skipDuplicates:  params['skipDuplicates'] != 'false',
         );
         setState(() => _activeJobId = jobId);
         await JobIdService.save(jobId);

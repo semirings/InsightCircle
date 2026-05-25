@@ -49,7 +49,7 @@ from typing import Optional
 import ic_log
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse  # used in _unhandled exception handler
-from google.cloud import pubsub_v1, storage
+from google.cloud import bigquery, pubsub_v1, storage
 from google.api_core.retry import Retry
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -95,6 +95,7 @@ _DEFAULT_KEYWORDS: list[str] = json.loads(
 
 _storage_client   = None
 _publisher_client = None
+_bq_client        = None
 
 
 def _get_publisher() -> pubsub_v1.PublisherClient:
@@ -124,6 +125,37 @@ def _get_storage() -> storage.Client:
     if _storage_client is None:
         _storage_client = storage.Client()
     return _storage_client
+
+
+def _get_bq() -> bigquery.Client:
+    global _bq_client
+    if _bq_client is None:
+        _bq_client = bigquery.Client()
+    return _bq_client
+
+
+def _query_known_ids(video_ids: list[str]) -> set[str]:
+    """Return the subset of video_ids already present in token_completion."""
+    if not video_ids:
+        return set()
+    project = os.environ.get("GCP_PROJECT", "creator-d4m-2026-1774038056")
+    query = f"""
+        SELECT DISTINCT video_id
+        FROM `{project}.insight_metadata.token_completion`
+        WHERE video_id IN UNNEST(@video_ids)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ArrayQueryParameter("video_ids", "STRING", video_ids)
+        ]
+    )
+    try:
+        rows = _get_bq().query(query, job_config=job_config).result()
+        return {row.video_id for row in rows}
+    except Exception as exc:
+        log.warning("_query_known_ids failed — proceeding without dedup filter",
+                    error=str(exc))
+        return set()
 
 
 def _get_youtube():
@@ -513,6 +545,16 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/filter_known_ids", summary="Return video IDs already in insight_metadata")
+async def filter_known_ids(request: Request) -> dict:
+    body = await request.json()
+    video_ids = body.get("video_ids", [])
+    if not isinstance(video_ids, list):
+        raise HTTPException(status_code=400, detail="video_ids must be a list")
+    known = _query_known_ids(video_ids)
+    return {"known_ids": list(known)}
+
+
 @app.post("/pubsub/ingest", summary="Run ingestion pipeline phase(s)")
 async def pubsub_ingest(request: Request) -> dict:
     envelope = await request.json()
@@ -539,6 +581,12 @@ async def pubsub_ingest(request: Request) -> dict:
     try:
         if phase in ("1", "all"):
             raw = _phase1(job_id, keywords, max_results_per_q, max_total)
+            known = _query_known_ids(list(raw.keys()))
+            if known:
+                log.info("Filtering known video IDs", job_id=job_id,
+                         before=len(raw), known=len(known))
+                raw = {vid: title for vid, title in raw.items() if vid not in known}
+                log.info("Filtered result", job_id=job_id, after=len(raw))
 
         if phase in ("2", "all"):
             raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
