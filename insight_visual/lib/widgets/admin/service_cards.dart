@@ -52,7 +52,9 @@ class ServiceCard extends StatelessWidget {
           Row(
             children: [
               const Spacer(),
+              _RunBtn(onTap: onRun, running: running),
               if (expandable) ...[
+                const SizedBox(width: 8),
                 MouseRegion(
                   cursor: SystemMouseCursors.click,
                   child: GestureDetector(
@@ -61,9 +63,7 @@ class ServiceCard extends StatelessWidget {
                         size: 11, color: kAdminTextDim),
                   ),
                 ),
-                const SizedBox(width: 8),
               ],
-              _RunBtn(onTap: onRun, running: running),
             ],
           ),
         ],
@@ -236,6 +236,8 @@ class _FloatingPanelState extends State<_FloatingPanel> {
               Row(
                 children: [
                   const Spacer(),
+                  _RunBtn(onTap: widget.onRun, running: widget.running),
+                  const SizedBox(width: 8),
                   MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
@@ -244,8 +246,6 @@ class _FloatingPanelState extends State<_FloatingPanel> {
                           size: 11, color: kAdminTextDim),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  _RunBtn(onTap: widget.onRun, running: widget.running),
                 ],
               ),
             ],
