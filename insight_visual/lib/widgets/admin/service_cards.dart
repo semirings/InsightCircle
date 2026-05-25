@@ -273,8 +273,10 @@ class _RunBtnState extends State<_RunBtn> {
   @override
   Widget build(BuildContext context) {
     final enabled = !widget.running;
+    const kRunGreen      = Color(0xFF1B5E20);
+    const kRunGreenHover = Color(0xFF2E7D32);
     final bg = enabled
-        ? (_hovered ? kAdminAccent : kAdminBorderMid)
+        ? (_hovered ? kRunGreenHover : kRunGreen)
         : kAdminBorderMid;
     return MouseRegion(
       cursor:
@@ -1042,6 +1044,7 @@ class ISCard extends StatefulWidget {
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
   final List<String> tables;
+  final bool tablesLoading;
 
   const ISCard({
     super.key,
@@ -1049,6 +1052,7 @@ class ISCard extends StatefulWidget {
     required this.tables,
     this.onParamsChanged,
     this.running = false,
+    this.tablesLoading = false,
   });
 
   @override
@@ -1060,6 +1064,47 @@ class _ISCardState extends State<ISCard> {
 
   Map<String, String> get _params => {'table': _table ?? ''};
 
+  Widget _tableField() {
+    if (widget.tablesLoading) {
+      return Container(
+        height: 24,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        decoration: BoxDecoration(
+          color: kAdminSurfaceLow,
+          border: Border.all(color: kAdminBorder),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text('loading…',
+            style: inter(fontSize: 10, color: kAdminTextDim)),
+      );
+    }
+    if (widget.tables.isEmpty) {
+      return Container(
+        height: 24,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        decoration: BoxDecoration(
+          color: kAdminSurfaceLow,
+          border: Border.all(color: kAdminBorder),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text('no tables found',
+            style: inter(fontSize: 10, color: kAdminTextDim)),
+      );
+    }
+    return _dropdownField<String>(
+      value: _table,
+      items: widget.tables
+          .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+          .toList(),
+      onChanged: (v) {
+        setState(() => _table = v);
+        widget.onParamsChanged?.call({'table': v ?? ''});
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ServiceCard(
@@ -1069,30 +1114,7 @@ class _ISCardState extends State<ISCard> {
       onRun:     () => widget.onRun(_params),
       body: _FieldRow(
         label: 'Table',
-        field: widget.tables.isEmpty
-            ? Container(
-                height: 24,
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: kAdminSurfaceLow,
-                  border: Border.all(color: kAdminBorder),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text('loading…',
-                    style: inter(fontSize: 10, color: kAdminTextDim)),
-              )
-            : _dropdownField<String>(
-                value: _table,
-                items: widget.tables
-                    .map((t) =>
-                        DropdownMenuItem(value: t, child: Text(t)))
-                    .toList(),
-                onChanged: (v) {
-                  setState(() => _table = v);
-                  widget.onParamsChanged?.call({'table': v ?? ''});
-                },
-              ),
+        field: _tableField(),
       ),
     );
   }

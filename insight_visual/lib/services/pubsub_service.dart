@@ -9,7 +9,8 @@ class PubSubService {
 
   static Future<void> publish(String topic, Map<String, dynamic> payload) async {
     final message = jsonEncode(payload);
-    final result = await Process.run('gcloud', [
+    const gcloud = '/opt/homebrew/share/google-cloud-sdk/bin/gcloud';
+    final result = await Process.run(gcloud, [
       'pubsub', 'topics', 'publish', topic,
       '--message', message,
       '--project', kGcpProject,

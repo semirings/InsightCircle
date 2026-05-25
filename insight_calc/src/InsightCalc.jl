@@ -17,7 +17,7 @@ include("automata.jl")
 include("algebra.jl")
 include("pubsub.jl")
 
-export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, queryVideo, publishCompletion
+export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, queryVideo, publishCompletion, queryAA
 
 const START_TIME = Ref{DateTime}(now())
 
@@ -141,7 +141,11 @@ end
 end
 
 function main()
-    loadRegistry!()
+    @async try
+        loadRegistry!()
+    catch err
+        @error "[main] registry load failed — continuing with empty registry" error=string(err)
+    end
     Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")),
                  middleware=[_completionMiddleware])
 end

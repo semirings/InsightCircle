@@ -42,8 +42,9 @@ class _AdminScreenState extends State<AdminScreen> {
   final Map<String, ExecutionStatus>       _liveStatus = {};
   final Map<String, List<StepResult>>      _stepRuns   = {};
   final Map<String, Map<String, String>>   _stepParams = {};
-  List<String>               _bqTables   = [];
-  List<Map<String, String>>  _icScripts  = [];
+  List<String>               _bqTables        = [];
+  bool                       _bqTablesLoading = true;
+  List<Map<String, String>>  _icScripts       = [];
   String?                    _activeJobId;
   String?                    _activeVideoId;
   final Map<String, List<Map<String, dynamic>>> _stepPreview = {};
@@ -73,8 +74,6 @@ class _AdminScreenState extends State<AdminScreen> {
       final cr      = await CloudRunService.create();
       final hs      = await HistoryService.create();
       final ls      = await LoggingService.create();
-      final bq      = await BigQueryService.create();
-      final tables  = await bq.listTables(kGcpProject, kBqDataset);
       final scripts = await cr.fetchScripts(kGcpProject, kRegion, kCalcService)
           .catchError((_) => <Map<String, String>>[]);
       if (!mounted) return;
@@ -82,14 +81,29 @@ class _AdminScreenState extends State<AdminScreen> {
         _cloudRun      = cr;
         _history       = hs;
         _logging       = ls;
-        _bigQuery      = bq;
-        _bqTables      = tables;
         _icScripts     = scripts;
         _servicesReady = true;
       });
       await _loadHistory();
     } catch (e) {
       if (mounted) setState(() => _servicesReady = false);
+    }
+    _fetchBqTables();
+  }
+
+  Future<void> _fetchBqTables() async {
+    setState(() => _bqTablesLoading = true);
+    try {
+      final bq     = await BigQueryService.create();
+      final tables = await bq.listTables(kGcpProject, kBqDataset);
+      if (!mounted) return;
+      setState(() {
+        _bigQuery        = bq;
+        _bqTables        = tables;
+        _bqTablesLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _bqTablesLoading = false);
     }
   }
 
@@ -239,6 +253,13 @@ class _AdminScreenState extends State<AdminScreen> {
     setState(() => _running = false);
 
     if (results.isNotEmpty) {
+      // Update history column immediately in memory.
+      setState(() {
+        for (final r in results) {
+          _stepRuns[r.stepId] = [r, ...(_stepRuns[r.stepId] ?? [])];
+        }
+      });
+
       final mode = steps.length == kPipelineSteps.length
           ? RunMode.runAll
           : steps.length == 1
@@ -254,6 +275,14 @@ class _AdminScreenState extends State<AdminScreen> {
           steps:       results,
         ));
       } catch (_) {}
+
+      if (steps.length == 1) {
+        setState(() {
+          _selectedRun = results.first;
+          _detailTab   = 0;
+          _logs        = [];
+        });
+      }
     }
 
     await _loadHistory();
@@ -313,6 +342,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     steps: kPipelineSteps.toList(),
                     liveStatus: _liveStatus,
                     bqTables: _bqTables,
+                    bqTablesLoading: _bqTablesLoading,
                     icScripts: _icScripts,
                     activeJobId: _activeJobId,
                     activeVideoId: _activeVideoId,
@@ -320,8 +350,9 @@ class _AdminScreenState extends State<AdminScreen> {
                     onParamsChanged: _updateStepParams,
                   ),
                 ),
-                // Column 2 — run history
-                Expanded(
+                // Column 2 — run history (fixed width)
+                SizedBox(
+                  width: _kColRight,
                   child: _HistoryColumn(
                     steps: kPipelineSteps.toList(),
                     stepRuns: _stepRuns,
@@ -329,10 +360,9 @@ class _AdminScreenState extends State<AdminScreen> {
                     onSelectRun: _selectRun,
                   ),
                 ),
-                // Column 3 — detail panel (conditional)
+                // Column 3 — detail panel (fills remaining space)
                 if (_selectedRun != null)
-                  SizedBox(
-                    width: _kColRight,
+                  Expanded(
                     child: _DetailPanel(
                       run: _selectedRun!,
                       activeTab: _detailTab,
@@ -509,6 +539,7 @@ class _ServiceCardColumn extends StatelessWidget {
   final List<PipelineStep> steps;
   final Map<String, ExecutionStatus> liveStatus;
   final List<String> bqTables;
+  final bool bqTablesLoading;
   final List<Map<String, String>> icScripts;
   final String? activeJobId;
   final String? activeVideoId;
@@ -519,6 +550,7 @@ class _ServiceCardColumn extends StatelessWidget {
     required this.steps,
     required this.liveStatus,
     required this.bqTables,
+    required this.bqTablesLoading,
     required this.icScripts,
     required this.onRun,
     required this.onParamsChanged,
@@ -560,6 +592,7 @@ class _ServiceCardColumn extends StatelessWidget {
         return ISCard(
           running: running,
           tables: bqTables,
+          tablesLoading: bqTablesLoading,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
         );
@@ -926,57 +959,152 @@ class _ResultsTab extends StatelessWidget {
   }
 }
 
-class _PreviewGrid extends StatelessWidget {
+class _PreviewGrid extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
   const _PreviewGrid({required this.rows});
 
   @override
+  State<_PreviewGrid> createState() => _PreviewGridState();
+}
+
+class _PreviewGridState extends State<_PreviewGrid> {
+  late final ScrollController _headerScroll;
+  late final ScrollController _bodyScroll;
+  late List<double> _colWidths;
+
+  static const _initColW = 90.0;
+  static const _minColW  = 30.0;
+  static const _maxColW  = 600.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _colWidths    = List.filled(widget.rows.first.keys.length, _initColW);
+    _headerScroll = ScrollController();
+    _bodyScroll   = ScrollController();
+    _bodyScroll.addListener(_syncHeader);
+  }
+
+  @override
+  void dispose() {
+    _bodyScroll.removeListener(_syncHeader);
+    _headerScroll.dispose();
+    _bodyScroll.dispose();
+    super.dispose();
+  }
+
+  void _syncHeader() {
+    if (_headerScroll.hasClients &&
+        _headerScroll.offset != _bodyScroll.offset) {
+      _headerScroll.jumpTo(_bodyScroll.offset);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final cols = rows.first.keys.toList();
-    return Scrollbar(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(8),
-          child: Table(
-            defaultColumnWidth: const IntrinsicColumnWidth(),
-            border: TableBorder.all(color: kAdminBorder, width: 0.5),
-            children: [
-              // header
-              TableRow(
-                decoration: const BoxDecoration(color: kAdminSurfaceLow),
-                children: cols
-                    .map((c) => Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 4),
-                          child: Text(c,
-                              style: inter(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w700,
-                                  color: kAdminTextDim,
-                                  letterSpacing: 0.4)),
-                        ))
-                    .toList(),
-              ),
-              // data rows
-              for (final row in rows)
-                TableRow(
-                  children: cols
-                      .map((c) => Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 3),
-                            child: Text(
-                              '${row[c] ?? ''}',
-                              style: inter(fontSize: 9, color: kAdminText),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ))
-                      .toList(),
-                ),
-            ],
+    final cols   = widget.rows.first.keys.toList();
+    final totalW = _colWidths.fold(0.0, (s, w) => s + w);
+
+    Widget headerCell(int i) => SizedBox(
+      width: _colWidths[i],
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Text(cols[i],
+              style: inter(fontSize: 9, fontWeight: FontWeight.w700,
+                  color: kAdminTextDim, letterSpacing: 0.4),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
+          // Column resize handle on right edge
+          Positioned(
+            right: 0, top: 0, bottom: 0, width: 6,
+            child: GestureDetector(
+              onHorizontalDragUpdate: (d) => setState(() {
+                _colWidths[i] =
+                    (_colWidths[i] + d.delta.dx).clamp(_minColW, _maxColW);
+              }),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border(
+                        right: BorderSide(color: kAdminBorder, width: 1)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    Widget dataCell(int i, dynamic value) => SizedBox(
+      width: _colWidths[i],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        child: Text('${value ?? ''}',
+          style: inter(fontSize: 9, color: kAdminText),
+          overflow: TextOverflow.ellipsis,
         ),
       ),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Frozen header ──────────────────────────────────────────────────
+        Container(
+          color: kAdminSurfaceLow,
+          child: SingleChildScrollView(
+            controller: _headerScroll,
+            scrollDirection: Axis.horizontal,
+            physics: const NeverScrollableScrollPhysics(),
+            child: SizedBox(
+              width: totalW,
+              child: Row(children: [
+                for (int i = 0; i < cols.length; i++) headerCell(i),
+              ]),
+            ),
+          ),
+        ),
+        Container(height: 1, color: kAdminBorder),
+        // ── Scrollable + selectable data rows ─────────────────────────────
+        Expanded(
+          child: Scrollbar(
+            controller: _bodyScroll,
+            child: SingleChildScrollView(
+              controller: _bodyScroll,
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: totalW,
+                child: SelectionArea(
+                  child: ListView.builder(
+                    itemCount: widget.rows.length,
+                    itemBuilder: (_, i) {
+                      final row = widget.rows[i];
+                      return Container(
+                        decoration: BoxDecoration(
+                          border: Border(bottom:
+                              BorderSide(color: kAdminBorder, width: 0.5)),
+                          color: i.isOdd
+                              ? Colors.white.withValues(alpha: 0.02)
+                              : null,
+                        ),
+                        child: Row(children: [
+                          for (int j = 0; j < cols.length; j++)
+                            dataCell(j, row[cols[j]]),
+                        ]),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

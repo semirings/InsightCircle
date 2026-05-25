@@ -384,6 +384,49 @@ end
 queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc =
     queryTable("yt_metadata", d4mQuery; chunkSize=chunkSize)
 
+# ── AA table query ────────────────────────────────────────────────────────────
+#
+# AA tables (tokens, ontology, …) store D4M triples as BQ rows:
+#   (video_id, row, col, val, timestamp)
+# Generic rowsToAssoc would treat each BQ row as an entity, producing the
+# wrong mapping.  This function reads (row, col, val) directly, filtered by
+# video_id, and reconstructs the original Assoc.
+
+function queryAA(table::String, videoId::String;
+                 chunkSize::Int=100_000)::Assoc
+    occursin(r"^[A-Za-z0-9_]+$", table) ||
+        error("Invalid table name '$table'")
+    srv    = getServer()
+    sql    = """
+        SELECT row, col, val
+        FROM `$(srv.project).$(srv.dataset).$table`
+        WHERE video_id = @video_id
+    """
+    params = [Dict(
+        "name"           => "video_id",
+        "parameterType"  => Dict("type" => "STRING"),
+        "parameterValue" => Dict("value" => videoId),
+    )]
+    jobId   = _submitJob(srv.session, srv.project, sql; queryParameters=params)
+    url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId" *
+              "?maxResults=$chunkSize&location=us-central1"
+    payload = JSON3.read(HTTP.get(url, _authHeaders(srv.session)).body)
+    bqrows  = get(payload, :rows, [])
+    isempty(bqrows) && return Assoc(String[], String[], String[])
+    rowKeys = String[]
+    colKeys = String[]
+    vals    = String[]
+    for r in bqrows
+        cells = r.f
+        isnothing(cells[1].v) && continue
+        push!(rowKeys, String(cells[1].v))
+        push!(colKeys, isnothing(cells[2].v) ? "" : String(cells[2].v))
+        push!(vals,    isnothing(cells[3].v) ? "" : String(cells[3].v))
+    end
+    isempty(rowKeys) && return Assoc(String[], String[], String[])
+    return Assoc(rowKeys, colKeys, vals)
+end
+
 # ── Script registry ───────────────────────────────────────────────────────────
 
 struct ScriptDef
