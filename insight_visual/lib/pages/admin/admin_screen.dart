@@ -369,15 +369,13 @@ class _Toolbar extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          if (activeJobId != null) ...[
-            Text('JOB',
-                style: spaceGrotesk(
-                    fontSize: 10, color: kAdminTextDim, letterSpacing: 1)),
-            const SizedBox(width: 6),
-            Text(activeJobId!,
-                style: inter(fontSize: 11, color: kAdminTextMuted)),
-            const SizedBox(width: 20),
-          ],
+          Text('JOB',
+              style: spaceGrotesk(
+                  fontSize: 10, color: kAdminTextDim, letterSpacing: 1)),
+          const SizedBox(width: 6),
+          Text(activeJobId ?? '—',
+              style: inter(fontSize: 11, color: kAdminTextMuted)),
+          const SizedBox(width: 20),
           if (running) ...[
             const SizedBox(
               width: 14,
