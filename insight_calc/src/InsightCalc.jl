@@ -110,7 +110,38 @@ end
                      "job_id" => jobId, "page_token" => nextToken))
 end
 
+# ── Script registry routes ────────────────────────────────────────────────────
+
+@get "/scripts" function(::HTTP.Request)
+    scripts = getRegistry()
+    return json(Dict(
+        "scripts" => [Dict("name" => s.name, "description" => s.description)
+                      for s in scripts],
+        "count"   => length(scripts),
+    ))
+end
+
+@post "/script/:name" function(req::HTTP.Request, name::String)
+    scripts = getRegistry()
+    idx = findfirst(s -> s.name == name, scripts)
+    isnothing(idx) && return json(Dict("error" => "script '$name' not found"), status=404)
+    s   = scripts[idx]
+    srv = getServer()
+    jobId   = _submitJob(srv.session, srv.project, s.query)
+    url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId?maxResults=10000&location=us-central1"
+    payload = JSON3.read(HTTP.get(url, _authHeaders(srv.session)).body)
+    aa      = rowsToAssoc(payload, s.row_key)
+    rs, cs, vs = find(aa)
+    return json(Dict("rows" => rs, "cols" => cs, "vals" => vs, "script" => name))
+end
+
+@post "/scripts/reload" function(::HTTP.Request)
+    scripts = loadRegistry!()
+    return json(Dict("status" => "ok", "count" => length(scripts)))
+end
+
 function main()
+    loadRegistry!()
     Oxygen.serve(host="0.0.0.0", port=parse(Int, get(ENV, "PORT", "8080")),
                  middleware=[_completionMiddleware])
 end

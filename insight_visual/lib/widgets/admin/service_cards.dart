@@ -942,12 +942,14 @@ class ICCard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
+  final List<Map<String, String>> scripts;
 
   const ICCard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
     this.running = false,
+    this.scripts = const [],
   });
 
   @override
@@ -955,15 +957,28 @@ class ICCard extends StatefulWidget {
 }
 
 class _ICCardState extends State<ICCard> {
-  final _query = TextEditingController(text: 'SELECT * FROM tokens LIMIT 10');
+  String? _selected;
 
-  Map<String, String> get _params => {'query': _query.text};
+  Map<String, String> get _params => {'script': _selected ?? ''};
   void _notify() => widget.onParamsChanged?.call(_params);
 
   @override
-  void dispose() {
-    _query.dispose();
-    super.dispose();
+  void didUpdateWidget(ICCard old) {
+    super.didUpdateWidget(old);
+    if (widget.scripts.isNotEmpty &&
+        (_selected == null ||
+            !widget.scripts.any((s) => s['name'] == _selected))) {
+      _selected = widget.scripts.first['name'];
+      _notify();
+    }
+  }
+
+  String _description() {
+    if (_selected == null) return '';
+    return widget.scripts
+            .firstWhere((s) => s['name'] == _selected,
+                orElse: () => {})['description'] ??
+        '';
   }
 
   @override
@@ -973,31 +988,48 @@ class _ICCardState extends State<ICCard> {
       title:     'Calc',
       running:   widget.running,
       onRun:     () => widget.onRun(_params),
-      body: Container(
-        height: 48,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        decoration: BoxDecoration(
-          color: kAdminSurfaceLow,
-          border: Border.all(color: kAdminBorder),
-          borderRadius: BorderRadius.circular(3),
-        ),
-        child: TextField(
-          controller: _query,
-          maxLines: null,
-          style: const TextStyle(
-              fontFamily: 'monospace', fontSize: 10, color: kAdminText),
-          decoration: InputDecoration(
-            border: InputBorder.none,
-            hintText: 'SELECT …',
-            hintStyle: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 10,
-                color: kAdminTextDim),
-            isDense: true,
-            contentPadding: EdgeInsets.zero,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _FieldRow(
+            label: 'Script',
+            field: widget.scripts.isEmpty
+                ? Container(
+                    height: 24,
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    decoration: BoxDecoration(
+                      color: kAdminSurfaceLow,
+                      border: Border.all(color: kAdminBorder),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text('loading…',
+                        style: inter(fontSize: 10, color: kAdminTextDim)),
+                  )
+                : _dropdownField<String>(
+                    value: _selected,
+                    items: widget.scripts
+                        .map((s) => DropdownMenuItem(
+                              value: s['name'],
+                              child: Text(s['name'] ?? ''),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      setState(() => _selected = v);
+                      _notify();
+                    },
+                  ),
           ),
-          onChanged: (_) => _notify(),
-        ),
+          if (_description().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, left: 70),
+              child: Text(
+                _description(),
+                style: inter(fontSize: 9, color: kAdminTextDim),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
       ),
     );
   }

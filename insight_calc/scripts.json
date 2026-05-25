@@ -1,0 +1,20 @@
+[
+  {
+    "name": "top_channels",
+    "description": "Channels ranked by total view count",
+    "query": "SELECT uploader, SUM(CAST(val AS INT64)) AS total_views FROM `creator-d4m-2026-1774038056.insight_metadata.tokens` WHERE col = 'views' GROUP BY uploader ORDER BY total_views DESC LIMIT 50",
+    "row_key": "uploader"
+  },
+  {
+    "name": "high_engagement",
+    "description": "Videos with engagement rate above 5%",
+    "query": "SELECT video_id, SAFE_DIVIDE(SUM(CASE WHEN col IN ('likes','comments') THEN CAST(val AS INT64) ELSE 0 END), NULLIF(SUM(CASE WHEN col = 'views' THEN CAST(val AS INT64) ELSE 0 END), 0)) AS engagement FROM `creator-d4m-2026-1774038056.insight_metadata.tokens` GROUP BY video_id HAVING engagement >= 0.05 ORDER BY engagement DESC LIMIT 100",
+    "row_key": "video_id"
+  },
+  {
+    "name": "recent_ontology_nodes",
+    "description": "Most frequent ontology nodes across all videos",
+    "query": "SELECT col, COUNT(*) AS frequency FROM `creator-d4m-2026-1774038056.insight_metadata.ontology` WHERE col LIKE 'node|%|type' GROUP BY col ORDER BY frequency DESC LIMIT 100",
+    "row_key": "col"
+  }
+]

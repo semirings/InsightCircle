@@ -384,6 +384,47 @@ end
 queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc =
     queryTable("yt_metadata", d4mQuery; chunkSize=chunkSize)
 
+# ── Script registry ───────────────────────────────────────────────────────────
+
+struct ScriptDef
+    name        :: String
+    description :: String
+    query       :: String
+    row_key     :: String
+end
+
+const _REGISTRY = Ref{Vector{ScriptDef}}(ScriptDef[])
+
+"""
+    loadRegistry!() -> Vector{ScriptDef}
+
+Fetch `config/scripts.json` from GCS and replace the in-memory registry.
+Safe to call at any time; used at startup and via POST /scripts/reload.
+"""
+function loadRegistry!()::Vector{ScriptDef}
+    bucket  = get(ENV, "GCS_BUCKET", "insightcircle_bucket")
+    object  = get(ENV, "SCRIPTS_OBJECT", "config/scripts.json")
+    encoded = HTTP.escapeuri(object)
+    url     = "https://storage.googleapis.com/storage/v1/b/$bucket/o/$encoded?alt=media"
+    srv     = getServer()
+    resp    = HTTP.get(url, _authHeaders(srv.session))
+    defs    = JSON3.read(resp.body)
+    scripts = ScriptDef[
+        ScriptDef(
+            String(s.name),
+            String(get(s, :description, "")),
+            String(s.query),
+            String(get(s, :row_key, "video_id")),
+        )
+        for s in defs
+    ]
+    _REGISTRY[] = scripts
+    @info "Script registry loaded" count=length(scripts)
+    return scripts
+end
+
+getRegistry()::Vector{ScriptDef} = _REGISTRY[]
+
 # ── ICTable — BQ-aware cursor, D4M-style getindex ────────────────────────────
 #
 # Usage:

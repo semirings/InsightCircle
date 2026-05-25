@@ -42,9 +42,10 @@ class _AdminScreenState extends State<AdminScreen> {
   final Map<String, ExecutionStatus>       _liveStatus = {};
   final Map<String, List<StepResult>>      _stepRuns   = {};
   final Map<String, Map<String, String>>   _stepParams = {};
-  List<String> _bqTables   = [];
-  String?      _activeJobId;
-  String?      _activeVideoId;
+  List<String>               _bqTables   = [];
+  List<Map<String, String>>  _icScripts  = [];
+  String?                    _activeJobId;
+  String?                    _activeVideoId;
 
   StepResult? _selectedRun;
   int  _detailTab   = 0;
@@ -68,11 +69,13 @@ class _AdminScreenState extends State<AdminScreen> {
 
   Future<void> _initServices() async {
     try {
-      final cr     = await CloudRunService.create();
-      final hs     = await HistoryService.create();
-      final ls     = await LoggingService.create();
-      final bq     = await BigQueryService.create();
-      final tables = await bq.listTables(kGcpProject, kBqDataset);
+      final cr      = await CloudRunService.create();
+      final hs      = await HistoryService.create();
+      final ls      = await LoggingService.create();
+      final bq      = await BigQueryService.create();
+      final tables  = await bq.listTables(kGcpProject, kBqDataset);
+      final scripts = await cr.fetchScripts(kGcpProject, kRegion, kCalcService)
+          .catchError((_) => <Map<String, String>>[]);
       if (!mounted) return;
       setState(() {
         _cloudRun      = cr;
@@ -80,6 +83,7 @@ class _AdminScreenState extends State<AdminScreen> {
         _logging       = ls;
         _bigQuery      = bq;
         _bqTables      = tables;
+        _icScripts     = scripts;
         _servicesReady = true;
       });
       await _loadHistory();
@@ -144,10 +148,12 @@ class _AdminScreenState extends State<AdminScreen> {
         return ExecutionStatus.succeeded;
 
       case 'IC':
+        final script = params['script'] ?? '';
+        if (script.isEmpty) return ExecutionStatus.succeeded;
         await _cloudRun!.callServiceEndpoint(
           kGcpProject, kRegion, kCalcService,
-          '/query/yt_metadata',
-          {'query': (params['query'] ?? '').isEmpty ? ':' : params['query']!},
+          '/script/$script',
+          {},
         );
         return ExecutionStatus.succeeded;
 
@@ -304,6 +310,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     steps: kPipelineSteps.toList(),
                     liveStatus: _liveStatus,
                     bqTables: _bqTables,
+                    icScripts: _icScripts,
                     activeJobId: _activeJobId,
                     activeVideoId: _activeVideoId,
                     onRun: _runSingleWithParams,
@@ -498,6 +505,7 @@ class _ServiceCardColumn extends StatelessWidget {
   final List<PipelineStep> steps;
   final Map<String, ExecutionStatus> liveStatus;
   final List<String> bqTables;
+  final List<Map<String, String>> icScripts;
   final String? activeJobId;
   final String? activeVideoId;
   final void Function(PipelineStep, Map<String, String>) onRun;
@@ -507,6 +515,7 @@ class _ServiceCardColumn extends StatelessWidget {
     required this.steps,
     required this.liveStatus,
     required this.bqTables,
+    required this.icScripts,
     required this.onRun,
     required this.onParamsChanged,
     this.activeJobId,
@@ -539,6 +548,7 @@ class _ServiceCardColumn extends StatelessWidget {
       case 'IC':
         return ICCard(
           running: running,
+          scripts: icScripts,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
         );

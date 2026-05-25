@@ -76,6 +76,26 @@ class CloudRunService {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  Future<List<Map<String, String>>> fetchScripts(
+    String project,
+    String region,
+    String serviceName,
+  ) async {
+    final name = 'projects/$project/locations/$region/services/$serviceName';
+    final svc  = await _api.projects.locations.services.get(name);
+    final uri  = svc.uri;
+    if (uri == null) throw Exception('Service $serviceName has no URL');
+
+    final resp = await _httpClient.get(Uri.parse('$uri/scripts'));
+    if (resp.statusCode >= 400) {
+      throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
+    }
+    final body = jsonDecode(resp.body) as Map<String, dynamic>;
+    return (body['scripts'] as List<dynamic>)
+        .map((s) => Map<String, String>.from(s as Map))
+        .toList();
+  }
+
   ExecutionStatus _statusFromExecution(run.GoogleCloudRunV2Execution exec) {
     final conditions = exec.conditions ?? [];
     for (final c in conditions) {
