@@ -134,6 +134,20 @@ resource "google_bigquery_table" "ontology_gpc" {
   schema              = local.aa_table_schema
 }
 
+resource "google_bigquery_table" "ontology_meta" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_meta"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
+resource "google_bigquery_table" "ontology_meta_gpc" {
+  dataset_id          = "insight_metadata"
+  table_id            = "ontology_meta_gpc"
+  deletion_protection = false
+  schema              = local.aa_table_schema
+}
+
 resource "google_bigquery_table" "logs" {
   dataset_id          = "insight_metadata"
   table_id            = "logs"

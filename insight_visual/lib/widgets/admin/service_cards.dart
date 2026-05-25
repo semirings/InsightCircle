@@ -809,12 +809,14 @@ class I2Card extends StatefulWidget {
 class _I2CardState extends State<I2Card> {
   final _jobId          = TextEditingController();
   final _date           = TextEditingController();
+  final _metaUri        = TextEditingController();
   final _commentsUri    = TextEditingController();
   final _transcriptsUri = TextEditingController();
 
   Map<String, String> get _params => {
         'jobId':          _jobId.text,
         'date':           _date.text,
+        'metaUri':        _metaUri.text,
         'commentsUri':    _commentsUri.text,
         'transcriptsUri': _transcriptsUri.text,
       };
@@ -835,6 +837,7 @@ class _I2CardState extends State<I2Card> {
   void dispose() {
     _jobId.dispose();
     _date.dispose();
+    _metaUri.dispose();
     _commentsUri.dispose();
     _transcriptsUri.dispose();
     super.dispose();
@@ -857,6 +860,10 @@ class _I2CardState extends State<I2Card> {
               label: 'Date',
               field: _inputField(_date,
                   hint: 'YYYY-MM-DD', onChanged: _notify)),
+          _FieldRow(
+              label: 'Meta',
+              field: _inputField(_metaUri,
+                  hint: 'gs://…/meta.jsonl', onChanged: _notify)),
           _FieldRow(
               label: 'Comments',
               field: _inputField(_commentsUri,

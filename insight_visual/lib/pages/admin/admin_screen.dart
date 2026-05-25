@@ -133,6 +133,7 @@ class _AdminScreenState extends State<AdminScreen> {
         await PubSubService.triggerOntology(
           jobId:          (params['jobId'] ?? '').isEmpty ? _newId() : params['jobId'],
           date:           params['date'] ?? '',
+          metaUri:        (params['metaUri'] ?? '').isEmpty ? null : params['metaUri'],
           commentsUri:    (params['commentsUri'] ?? '').isEmpty ? null : params['commentsUri'],
           transcriptsUri: (params['transcriptsUri'] ?? '').isEmpty ? null : params['transcriptsUri'],
         );

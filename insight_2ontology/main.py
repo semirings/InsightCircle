@@ -122,6 +122,19 @@ def _group_text_by_video(records: list[dict], text_key: str = "text") -> dict[st
     return {vid: " ".join(ts) for vid, ts in parts.items()}
 
 
+def _group_meta_text_by_video(records: list[dict]) -> dict[str, str]:
+    """Build title + description text per video from metadata JSONL records."""
+    result: dict[str, str] = {}
+    for r in records:
+        vid   = r.get("id") or r.get("video_id")
+        title = r.get("title", "")
+        desc  = r.get("description", "")
+        text  = ". ".join(part for part in (title, desc) if part).strip()
+        if vid and text:
+            result[vid] = text
+    return result
+
+
 # ── AA helpers ────────────────────────────────────────────────────────────────
 
 def _graph_docs_to_aa(video_id: str, graph_docs, table_name: str) -> dict:
@@ -245,6 +258,14 @@ async def pubsub_ingest_completion(request: Request) -> dict:
     total_nodes = total_rels = 0
 
     try:
+        gcs_uri = payload.get("gcs_uri")
+        if gcs_uri:
+            log.info("Processing meta job_id=%s uri=%s", job_id, gcs_uri)
+            records = _load_ndjson(gcs_uri)
+            texts   = _group_meta_text_by_video(records)
+            n, r    = _process_content(job_id, texts, "ontology_meta", "ontology_meta_gpc")
+            total_nodes += n; total_rels += r
+
         comments_uri = payload.get("comments_uri")
         if comments_uri:
             log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)

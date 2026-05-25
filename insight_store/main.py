@@ -48,6 +48,7 @@ _storage_client = storage.Client()
 _AA_TABLES = {
     "tokens",
     "ontology", "ontology_gpc",
+    "ontology_meta", "ontology_meta_gpc",
     "ontology_comments", "ontology_comments_gpc",
     "ontology_transcripts", "ontology_transcripts_gpc",
     "ontology_threads", "ontology_threads_gpc",
