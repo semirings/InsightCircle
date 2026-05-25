@@ -46,6 +46,7 @@ class _AdminScreenState extends State<AdminScreen> {
   List<Map<String, String>>  _icScripts  = [];
   String?                    _activeJobId;
   String?                    _activeVideoId;
+  final Map<String, List<Map<String, dynamic>>> _stepPreview = {};
 
   StepResult? _selectedRun;
   int  _detailTab   = 0;
@@ -160,7 +161,9 @@ class _AdminScreenState extends State<AdminScreen> {
       case 'IS':
         final table = params['table'] ?? '';
         if (table.isNotEmpty) {
-          await _bigQuery!.fetchTablePreview(kGcpProject, kBqDataset, table);
+          final rows = await _bigQuery!.fetchTablePreview(
+              kGcpProject, kBqDataset, table);
+          setState(() => _stepPreview['IS'] = rows);
         }
         return ExecutionStatus.succeeded;
 
@@ -335,6 +338,7 @@ class _AdminScreenState extends State<AdminScreen> {
                       activeTab: _detailTab,
                       logs: _logs,
                       logsLoading: _logsLoading,
+                      previewRows: _stepPreview[_selectedRun!.stepId],
                       onTabChanged: (i) => setState(() => _detailTab = i),
                       onClose: _closeDetail,
                     ),
@@ -775,6 +779,7 @@ class _DetailPanel extends StatelessWidget {
   final int activeTab;
   final List<LogEntry> logs;
   final bool logsLoading;
+  final List<Map<String, dynamic>>? previewRows;
   final void Function(int) onTabChanged;
   final VoidCallback onClose;
 
@@ -785,6 +790,7 @@ class _DetailPanel extends StatelessWidget {
     required this.logsLoading,
     required this.onTabChanged,
     required this.onClose,
+    this.previewRows,
   });
 
   static const _tabs = ['Results', 'Logs', 'Info'];
@@ -829,7 +835,7 @@ class _DetailPanel extends StatelessWidget {
           ),
           Expanded(
             child: switch (activeTab) {
-              0 => _ResultsTab(run: run),
+              0 => _ResultsTab(run: run, previewRows: previewRows),
               1 => _LogsTab(logs: logs, loading: logsLoading),
               _ => _InfoTab(run: run),
             },
@@ -891,10 +897,15 @@ class _DetailTabState extends State<_DetailTab> {
 
 class _ResultsTab extends StatelessWidget {
   final StepResult run;
-  const _ResultsTab({required this.run});
+  final List<Map<String, dynamic>>? previewRows;
+  const _ResultsTab({required this.run, this.previewRows});
 
   @override
   Widget build(BuildContext context) {
+    final rows = previewRows;
+    if (rows != null && rows.isNotEmpty) {
+      return _PreviewGrid(rows: rows);
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -910,6 +921,61 @@ class _ResultsTab extends StatelessWidget {
             Text('No result data recorded.',
                 style: inter(fontSize: 11, color: kAdminTextDim)),
         ],
+      ),
+    );
+  }
+}
+
+class _PreviewGrid extends StatelessWidget {
+  final List<Map<String, dynamic>> rows;
+  const _PreviewGrid({required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    final cols = rows.first.keys.toList();
+    return Scrollbar(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(8),
+          child: Table(
+            defaultColumnWidth: const IntrinsicColumnWidth(),
+            border: TableBorder.all(color: kAdminBorder, width: 0.5),
+            children: [
+              // header
+              TableRow(
+                decoration: const BoxDecoration(color: kAdminSurfaceLow),
+                children: cols
+                    .map((c) => Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 4),
+                          child: Text(c,
+                              style: inter(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: kAdminTextDim,
+                                  letterSpacing: 0.4)),
+                        ))
+                    .toList(),
+              ),
+              // data rows
+              for (final row in rows)
+                TableRow(
+                  children: cols
+                      .map((c) => Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 3),
+                            child: Text(
+                              '${row[c] ?? ''}',
+                              style: inter(fontSize: 9, color: kAdminText),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ))
+                      .toList(),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
