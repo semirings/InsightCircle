@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../config/pipeline_config.dart';
 import '../../models/execution_status.dart';
 import '../../models/log_entry.dart';
+import '../../models/pipeline_run.dart';
 import '../../models/pipeline_step.dart';
 import '../../models/step_result.dart';
 import '../../services/bigquery_service.dart';
@@ -186,12 +187,24 @@ class _AdminScreenState extends State<AdminScreen> {
     if (_running) return;
     setState(() => _running = true);
 
+    final runId      = _newId();
+    final runStarted = DateTime.now();
+    final results    = <StepResult>[];
+
     for (final step in steps) {
       setState(() => _liveStatus[step.id] = ExecutionStatus.running);
+      final stepStarted = DateTime.now();
       try {
         final params = _stepParams[step.id] ?? {};
         final status = await _dispatchStep(step, params);
         setState(() => _liveStatus[step.id] = status);
+        results.add(StepResult(
+          stepId:      step.id,
+          executionId: _newId(),
+          startedAt:   stepStarted,
+          completedAt: DateTime.now(),
+          status:      status,
+        ));
         if (status != ExecutionStatus.succeeded) {
           for (final rem
               in steps.skipWhile((s) => s.id != step.id).skip(1)) {
@@ -201,11 +214,38 @@ class _AdminScreenState extends State<AdminScreen> {
         }
       } catch (e) {
         setState(() => _liveStatus[step.id] = ExecutionStatus.failed);
+        results.add(StepResult(
+          stepId:       step.id,
+          executionId:  _newId(),
+          startedAt:    stepStarted,
+          completedAt:  DateTime.now(),
+          status:       ExecutionStatus.failed,
+          errorMessage: e.toString(),
+        ));
         break;
       }
     }
 
     setState(() => _running = false);
+
+    if (results.isNotEmpty) {
+      final mode = steps.length == kPipelineSteps.length
+          ? RunMode.runAll
+          : steps.length == 1
+              ? RunMode.runSingle
+              : RunMode.runFromStep;
+      try {
+        await _history?.recordRun(PipelineRun(
+          runId:       runId,
+          startedAt:   runStarted,
+          completedAt: DateTime.now(),
+          mode:        mode,
+          startStepId: steps.first.id,
+          steps:       results,
+        ));
+      } catch (_) {}
+    }
+
     await _loadHistory();
   }
 
