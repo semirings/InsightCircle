@@ -55,6 +55,10 @@ BQTable(srv::BQServer, name::String, row_key_col::String) = BQTable(srv, name, s
 # ── Module-level singletons ───────────────────────────────────────────────────
 const PROJECT_ROOT = abspath(joinpath(@__DIR__, "../.."))
 
+let envFile = joinpath(PROJECT_ROOT, ".env")
+    isfile(envFile) && DotEnv.config(envFile)
+end
+
 const _SERVER = Ref{Union{Nothing, BQServer}}(nothing)
 
 function dbSetup(projectId::String, dataset::String)::BQServer
