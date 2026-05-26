@@ -23,6 +23,6 @@ gcloud run deploy insight-token \
   --project creator-d4m-2026-1774038056 \
   --memory 1Gi \
   --cpu 2 \
-  --set-env-vars TOKEN_COMPLETION_TOPIC=projects/creator-d4m-2026-1774038056/topics/token-completion,AA_INGEST_TOPIC=projects/creator-d4m-2026-1774038056/topics/aa-ingest
+  --set-env-vars GCP_PROJECT_ID=creator-d4m-2026-1774038056,BQ_DATASET=insight_metadata
 
 echo "── Done"

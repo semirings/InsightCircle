@@ -20,7 +20,6 @@ import '../../widgets/admin/service_cards.dart';
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const _kColLeft  = 260.0;
-const _kColRight = 220.0;
 const _kGap      = 10.0;
 
 // ── Page entry point ───────────────────────────────────────────────────────
@@ -44,9 +43,10 @@ class _AdminScreenState extends State<AdminScreen> {
   final Map<String, Map<String, String>>   _stepParams = {};
   List<String>               _bqTables        = [];
   bool                       _bqTablesLoading = true;
+  List<String>               _itVideoIds       = [];
+  bool                       _itVideoIdsLoading = false;
   List<Map<String, String>>  _icScripts       = [];
   String?                    _activeJobId;
-  String?                    _activeVideoId;
   final Map<String, List<Map<String, dynamic>>> _stepPreview = {};
 
   StepResult? _selectedRun;
@@ -102,8 +102,32 @@ class _AdminScreenState extends State<AdminScreen> {
         _bqTables        = tables;
         _bqTablesLoading = false;
       });
+      _fetchItVideoIds();
     } catch (e) {
       if (mounted) setState(() => _bqTablesLoading = false);
+    }
+  }
+
+  Future<void> _fetchItVideoIds() async {
+    final bq = _bigQuery;
+    if (bq == null) return;
+    setState(() => _itVideoIdsLoading = true);
+    try {
+      final rows = await bq.runQuery(
+        kGcpProject,
+        'SELECT DISTINCT id FROM `$kGcpProject.$kBqDataset.yt_metadata`'
+        ' ORDER BY id LIMIT 1000',
+      );
+      if (!mounted) return;
+      setState(() {
+        _itVideoIds = rows
+            .map((r) => (r['id'] ?? '').toString())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        _itVideoIdsLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _itVideoIdsLoading = false);
     }
   }
 
@@ -159,7 +183,16 @@ class _AdminScreenState extends State<AdminScreen> {
         return ExecutionStatus.succeeded;
 
       case 'IT':
-        await PubSubService.triggerToken(params['videoId'] ?? '');
+        final ids = (params['videoIds'] ?? '')
+            .split(',')
+            .where((s) => s.isNotEmpty)
+            .toList();
+        if (ids.isEmpty) return ExecutionStatus.succeeded;
+        await _cloudRun!.callServiceEndpoint(
+          kGcpProject, kRegion, kTokenService,
+          '/tokenize/batch',
+          {'video_ids': ids},
+        );
         return ExecutionStatus.succeeded;
 
       case 'IC':
@@ -184,7 +217,6 @@ class _AdminScreenState extends State<AdminScreen> {
       case 'IW':
         final videoId = params['videoId'] ?? '';
         await PubSubService.triggerWhisper(videoId);
-        if (videoId.isNotEmpty) setState(() => _activeVideoId = videoId);
         return ExecutionStatus.succeeded;
 
       default:
@@ -335,9 +367,8 @@ class _AdminScreenState extends State<AdminScreen> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Column 1 — service-specific cards
-                SizedBox(
-                  width: _kColLeft,
+                // Columns 1+2 — service cards paired with run history
+                Expanded(
                   child: _ServiceCardColumn(
                     steps: kPipelineSteps.toList(),
                     liveStatus: _liveStatus,
@@ -345,18 +376,12 @@ class _AdminScreenState extends State<AdminScreen> {
                     bqTablesLoading: _bqTablesLoading,
                     icScripts: _icScripts,
                     activeJobId: _activeJobId,
-                    activeVideoId: _activeVideoId,
-                    onRun: _runSingleWithParams,
-                    onParamsChanged: _updateStepParams,
-                  ),
-                ),
-                // Column 2 — run history (fixed width)
-                SizedBox(
-                  width: _kColRight,
-                  child: _HistoryColumn(
-                    steps: kPipelineSteps.toList(),
+                    itVideoIds: _itVideoIds,
+                    itVideoIdsLoading: _itVideoIdsLoading,
                     stepRuns: _stepRuns,
                     selectedRun: _selectedRun,
+                    onRun: _runSingleWithParams,
+                    onParamsChanged: _updateStepParams,
                     onSelectRun: _selectRun,
                   ),
                 ),
@@ -542,9 +567,13 @@ class _ServiceCardColumn extends StatelessWidget {
   final bool bqTablesLoading;
   final List<Map<String, String>> icScripts;
   final String? activeJobId;
-  final String? activeVideoId;
+  final List<String> itVideoIds;
+  final bool itVideoIdsLoading;
+  final Map<String, List<StepResult>> stepRuns;
+  final StepResult? selectedRun;
   final void Function(PipelineStep, Map<String, String>) onRun;
   final void Function(String, Map<String, String>) onParamsChanged;
+  final void Function(StepResult) onSelectRun;
 
   const _ServiceCardColumn({
     required this.steps,
@@ -554,8 +583,12 @@ class _ServiceCardColumn extends StatelessWidget {
     required this.icScripts,
     required this.onRun,
     required this.onParamsChanged,
+    required this.onSelectRun,
+    required this.stepRuns,
     this.activeJobId,
-    this.activeVideoId,
+    this.itVideoIds        = const [],
+    this.itVideoIdsLoading = false,
+    this.selectedRun,
   });
 
   Widget _cardForStep(PipelineStep step) {
@@ -577,7 +610,8 @@ class _ServiceCardColumn extends StatelessWidget {
       case 'IT':
         return ITCard(
           running: running,
-          externalVideoId: activeVideoId,
+          videoIds: itVideoIds,
+          videoIdsLoading: itVideoIdsLoading,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
         );
@@ -614,11 +648,28 @@ class _ServiceCardColumn extends StatelessWidget {
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (int i = 0; i < steps.length; i++) ...[
-              _cardForStep(steps[i]),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(width: _kColLeft, child: _cardForStep(steps[i])),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _RunRow(
+                        runs: stepRuns[steps[i].id] ?? [],
+                        selectedRun: selectedRun,
+                        onSelectRun: onSelectRun,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               if (i < steps.length - 1)
-                Center(
+                Padding(
+                  padding: const EdgeInsets.only(left: _kColLeft / 2),
                   child: Container(
                     width: 1,
                     height: _kGap,
@@ -628,57 +679,6 @@ class _ServiceCardColumn extends StatelessWidget {
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ── Column 2 — Run history ─────────────────────────────────────────────────
-
-class _HistoryColumn extends StatelessWidget {
-  final List<PipelineStep> steps;
-  final Map<String, List<StepResult>> stepRuns;
-  final StepResult? selectedRun;
-  final void Function(StepResult) onSelectRun;
-
-  const _HistoryColumn({
-    required this.steps,
-    required this.stepRuns,
-    required this.selectedRun,
-    required this.onSelectRun,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final step in steps) ...[
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text(
-                step.id,
-                style: inter(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  color: kAdminTextDim,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 80,
-              child: _RunRow(
-                runs: stepRuns[step.id] ?? [],
-                selectedRun: selectedRun,
-                onSelectRun: onSelectRun,
-              ),
-            ),
-            const SizedBox(height: _kGap + 6),
-          ],
-        ],
       ),
     );
   }
@@ -704,19 +704,20 @@ class _RunRow extends StatelessWidget {
             style: inter(fontSize: 11, color: kAdminTextDim)),
       );
     }
-    return ListView.separated(
+    return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      itemCount: runs.length,
-      separatorBuilder: (_, _) => const SizedBox(width: 8),
-      itemBuilder: (_, i) {
-        final run      = runs[i];
-        final selected = selectedRun?.executionId == run.executionId;
-        return _RunCard(
-          run: run,
-          selected: selected,
-          onTap: () => onSelectRun(run),
-        );
-      },
+      child: Row(
+        children: [
+          for (int i = 0; i < runs.length; i++) ...[
+            _RunCard(
+              run: runs[i],
+              selected: selectedRun?.executionId == runs[i].executionId,
+              onTap: () => onSelectRun(runs[i]),
+            ),
+            if (i < runs.length - 1) const SizedBox(width: 8),
+          ],
+        ],
+      ),
     );
   }
 }

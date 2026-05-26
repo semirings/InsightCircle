@@ -886,14 +886,16 @@ class ITCard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
-  final String? externalVideoId;
+  final List<String> videoIds;
+  final bool videoIdsLoading;
 
   const ITCard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
     this.running = false,
-    this.externalVideoId,
+    this.videoIds = const [],
+    this.videoIdsLoading = false,
   });
 
   @override
@@ -901,42 +903,119 @@ class ITCard extends StatefulWidget {
 }
 
 class _ITCardState extends State<ITCard> {
-  final _videoId = TextEditingController();
+  final Set<String> _selected = {};
 
-  Map<String, String> get _params => {'videoId': _videoId.text};
+  Map<String, String> get _params => {'videoIds': _selected.join(',')};
   void _notify() => widget.onParamsChanged?.call(_params);
 
-  @override
-  void didUpdateWidget(ITCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.externalVideoId != null &&
-        widget.externalVideoId != oldWidget.externalVideoId) {
-      _videoId.text = widget.externalVideoId!;
-      _notify();
-    }
+  void _selectAll() {
+    setState(() => _selected..clear()..addAll(widget.videoIds));
+    _notify();
   }
 
-  @override
-  void dispose() {
-    _videoId.dispose();
-    super.dispose();
+  void _clearAll() {
+    setState(() => _selected.clear());
+    _notify();
   }
 
   @override
   Widget build(BuildContext context) {
+    const muted = TextStyle(color: kAdminTextMuted, fontSize: 11);
     return ServiceCard(
       serviceId: 'IT',
       title:     'Token',
       running:   widget.running,
       onRun:     () => widget.onRun(_params),
-      body: _FieldRow(
-        label: 'Video ID',
-        field: _inputField(_videoId,
-            hint: 'yt video_id', onChanged: _notify),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              _linkBtn('All',  _selectAll),
+              const SizedBox(width: 8),
+              _linkBtn('None', _clearAll),
+              const Spacer(),
+              Text('${_selected.length} / ${widget.videoIds.length}',
+                  style: muted),
+            ],
+          ),
+          const SizedBox(height: 4),
+          if (widget.videoIdsLoading)
+            const Text('loading…', style: muted)
+          else if (widget.videoIds.isEmpty)
+            const Text('no videos found', style: muted)
+          else
+            SizedBox(
+              height: 120,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: kAdminSurfaceLow,
+                  border: Border.all(color: kAdminBorder),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  itemCount: widget.videoIds.length,
+                  itemBuilder: (ctx, i) {
+                    final id      = widget.videoIds[i];
+                    final checked = _selected.contains(id);
+                    return InkWell(
+                      onTap: () {
+                        setState(() =>
+                            checked ? _selected.remove(id) : _selected.add(id));
+                        _notify();
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 14, height: 14,
+                              child: Checkbox(
+                                value: checked,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                                activeColor: kAdminAccent,
+                                side: const BorderSide(color: kAdminBorderMid),
+                                onChanged: (v) {
+                                  setState(() => v!
+                                      ? _selected.add(id)
+                                      : _selected.remove(id));
+                                  _notify();
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(id,
+                                style: const TextStyle(
+                                    color: kAdminText,
+                                    fontSize: 11,
+                                    fontFamily: 'monospace')),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
 }
+
+Widget _linkBtn(String label, VoidCallback onTap) => GestureDetector(
+      onTap: onTap,
+      child: Text(label,
+          style: const TextStyle(
+              color: kAdminBlue,
+              fontSize: 11,
+              decoration: TextDecoration.underline)),
+    );
 
 // ── IC — InsightCalc ───────────────────────────────────────────────────────
 

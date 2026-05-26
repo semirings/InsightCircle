@@ -3,7 +3,8 @@ import '../models/pipeline_step.dart';
 const kGcpProject  = 'creator-d4m-2026-1774038056';
 const kBqDataset   = 'insight_metadata';
 const kGcsBucket   = 'insightcircle_bucket';
-const kCalcService = 'insight-calc';
+const kCalcService  = 'insight-calc';
+const kTokenService = 'insight-token';
 const kRegion      = 'us-central1';
 
 const kPipelineSteps = <PipelineStep>[
@@ -24,8 +25,8 @@ const kPipelineSteps = <PipelineStep>[
   PipelineStep(
     id: 'IT',
     name: 'Token',
-    serviceType: 'Pub/Sub · whisper-completion',
-    jobName: 'whisper-completion',
+    serviceType: 'Cloud Run · REST',
+    jobName: kTokenService,
     region: kRegion,
   ),
   PipelineStep(

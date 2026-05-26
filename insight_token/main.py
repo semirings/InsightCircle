@@ -1,11 +1,13 @@
-"""InsightToken – FastAPI CaaS.
+"""InsightToken – FastAPI service.
 
-Subscribes to whisper_completion events.  For each completed event:
-  1. Reads gs://insightcircle_bucket/narrative/<video_id>
-  2. Tokenizes the text with spaCy.
-  3. Writes token list (one per line) to gs://insightcircle_bucket/tokens/<video_id>
+Tokenizes titles, descriptions, transcripts, and comments for YouTube videos.
+Writes tokens directly to the BigQuery `tokens` table.
 
-Also exposes POST /tokenize?video_id=<id> for direct invocation.
+Endpoints:
+  GET  /                         — health check
+  POST /tokenize?video_id=<id>   — single video
+  POST /tokenize/batch           — JSON body {"video_ids": [...]}
+  POST /pubsub/whisper-completion — Pub/Sub push handler (legacy)
 """
 
 import base64
@@ -16,22 +18,21 @@ from datetime import datetime, timezone
 import ic_log
 import spacy
 from fastapi import FastAPI, HTTPException, Request
-from google.cloud import pubsub_v1, storage
+from google.cloud import bigquery, storage
+from pydantic import BaseModel
 
 log = ic_log.get_logger(__name__)
 
-_BUCKET_NAME             = "insightcircle_bucket"
-_IN_PREFIX               = "narrative"
-_OUT_PREFIX              = "tokens"
-_SPACY_MODEL             = os.getenv("SPACY_MODEL", "en_core_web_sm")
-_TOKEN_COMPLETION_TOPIC  = os.environ["TOKEN_COMPLETION_TOPIC"]
-_AA_INGEST_TOPIC         = os.environ["AA_INGEST_TOPIC"]
+_BQ_PROJECT  = os.environ["GCP_PROJECT_ID"]
+_BQ_DATASET  = os.getenv("BQ_DATASET", "insight_metadata")
+_BUCKET      = "insightcircle_bucket"
+_SPACY_MODEL = os.getenv("SPACY_MODEL", "en_core_web_sm")
 
-app = FastAPI(title="InsightToken", version="0.3.0")
+app = FastAPI(title="InsightToken", version="0.4.0")
 
-_nlp            = None
-_storage_client = None
-_publisher      = None
+_nlp: spacy.language.Language | None = None
+_storage_client: storage.Client | None = None
+_bq_client: bigquery.Client | None = None
 
 
 def _get_nlp() -> spacy.language.Language:
@@ -49,49 +50,205 @@ def _get_storage() -> storage.Client:
     return _storage_client
 
 
-def _get_publisher() -> pubsub_v1.PublisherClient:
-    global _publisher
-    if _publisher is None:
-        _publisher = pubsub_v1.PublisherClient()
-    return _publisher
+def _get_bq() -> bigquery.Client:
+    global _bq_client
+    if _bq_client is None:
+        _bq_client = bigquery.Client(project=_BQ_PROJECT)
+    return _bq_client
 
 
-def _publish_aa(video_id: str, tokens: list[str]) -> None:
-    payload = {
-        "table_name": "tokens",
-        "video_id":   video_id,
-        "rows":       [video_id] * len(tokens),
-        "cols":       tokens,
-        "vals":       ["1"]      * len(tokens),
-    }
-    data = json.dumps(payload).encode("utf-8")
-    future = _get_publisher().publish(_AA_INGEST_TOPIC, data)
-    msg_id = future.result()
-    log.info("Published tokens AA video_id=%s count=%d msg_id=%s", video_id, len(tokens), msg_id)
+# ── Text utilities ─────────────────────────────────────────────────────────
+
+def _tokenize_text(text: str) -> list[str]:
+    """Return lowercase alpha tokens; drop stop words, punctuation, short tokens."""
+    nlp = _get_nlp()
+    doc = nlp(text[:1_000_000])
+    return [
+        t.lower_
+        for t in doc
+        if not t.is_stop and not t.is_space and not t.is_punct and len(t.text) > 1
+    ]
 
 
-def _publish_completion(video_id: str, status: str, token_count: int, gcs_out: str) -> None:
-    payload = {
-        "video_id":    video_id,
-        "status":      status,
-        "token_count": token_count,
-        "gcs_out":     gcs_out,
-        "timestamp":   datetime.now(timezone.utc).isoformat(),
-    }
-    data = json.dumps(payload).encode("utf-8")
-    future = _get_publisher().publish(_TOKEN_COMPLETION_TOPIC, data)
-    msg_id = future.result()
-    log.info("Published token_completion event (status=%s, msg_id=%s)", status, msg_id)
+# ── Source readers ─────────────────────────────────────────────────────────
 
+def _fetch_metadata(video_id: str) -> dict[str, str]:
+    """Return {title, description} from yt_metadata."""
+    bq = _get_bq()
+    query = (
+        f"SELECT title, description "
+        f"FROM `{_BQ_PROJECT}.{_BQ_DATASET}.yt_metadata` "
+        f"WHERE id = @vid LIMIT 1"
+    )
+    cfg = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("vid", "STRING", video_id)]
+    )
+    rows = list(bq.query(query, job_config=cfg).result())
+    if rows:
+        return {
+            "title":       rows[0].title or "",
+            "description": rows[0].description or "",
+        }
+    return {"title": "", "description": ""}
+
+
+def _read_transcript(video_id: str) -> str:
+    """Read GCS narrative/<video_id>; return empty string if missing."""
+    try:
+        blob = _get_storage().bucket(_BUCKET).blob(f"narrative/{video_id}")
+        if not blob.exists():
+            log.info("No transcript for video_id=%s", video_id)
+            return ""
+        return blob.download_as_text()
+    except Exception as exc:
+        log.warning("Transcript read failed video_id=%s: %s", video_id, exc)
+        return ""
+
+
+def _read_comments(video_id: str) -> list[str]:
+    """Scan ingest/*_comments.jsonl blobs and collect comment text for video_id."""
+    texts: list[str] = []
+    try:
+        for blob in _get_storage().list_blobs(_BUCKET, prefix="ingest/"):
+            if not blob.name.endswith("_comments.jsonl"):
+                continue
+            try:
+                for line in blob.download_as_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get("video_id") == video_id:
+                        text = obj.get("text", "")
+                        if text:
+                            texts.append(text)
+            except Exception as exc:
+                log.warning("Could not read %s: %s", blob.name, exc)
+    except Exception as exc:
+        log.warning("Comment scan failed video_id=%s: %s", video_id, exc)
+    return texts
+
+
+# ── BQ writer ──────────────────────────────────────────────────────────────
+
+def _write_tokens(video_id: str, source_tokens: dict[str, list[str]]) -> int:
+    """Delete existing rows for video_id, then stream-insert new token rows.
+
+    source_tokens: {source_name: [token, ...]}
+    Columns: video_id, row, col (= "source|token"), val, timestamp
+    Returns the number of rows inserted.
+    """
+    bq        = _get_bq()
+    table_ref = f"{_BQ_PROJECT}.{_BQ_DATASET}.tokens"
+    ts        = datetime.now(timezone.utc).isoformat()
+
+    # Remove stale tokens before re-inserting (idempotent runs).
+    bq.query(
+        f"DELETE FROM `{table_ref}` WHERE video_id = @vid",
+        job_config=bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("vid", "STRING", video_id)]
+        ),
+    ).result()
+
+    rows: list[dict] = []
+    for source, tokens in source_tokens.items():
+        seen: set[str] = set()
+        for token in tokens:
+            if token in seen:
+                continue
+            seen.add(token)
+            rows.append({
+                "video_id":  video_id,
+                "row":       video_id,
+                "col":       f"{source}|{token}",
+                "val":       "1",
+                "timestamp": ts,
+            })
+
+    if not rows:
+        log.info("No tokens for video_id=%s", video_id)
+        return 0
+
+    errors = bq.insert_rows_json(table_ref, rows)
+    if errors:
+        raise RuntimeError(f"BQ insert errors for {video_id}: {errors}")
+
+    log.info("Inserted %d tokens for video_id=%s", len(rows), video_id)
+    return len(rows)
+
+
+# ── Core processing ────────────────────────────────────────────────────────
+
+def _process_video(video_id: str) -> dict:
+    """Collect text from all sources, tokenize, write to BQ tokens table."""
+    log.info("Processing video_id=%s", video_id)
+
+    meta       = _fetch_metadata(video_id)
+    transcript = _read_transcript(video_id)
+    comments   = _read_comments(video_id)
+
+    source_tokens: dict[str, list[str]] = {}
+
+    if meta["title"]:
+        source_tokens["title"] = _tokenize_text(meta["title"])
+
+    if meta["description"]:
+        source_tokens["description"] = _tokenize_text(meta["description"])
+
+    if transcript:
+        source_tokens["transcript"] = _tokenize_text(transcript)
+
+    if comments:
+        merged: list[str] = []
+        for text in comments:
+            merged.extend(_tokenize_text(text))
+        source_tokens["comments"] = merged
+
+    total   = _write_tokens(video_id, source_tokens)
+    sources = list(source_tokens.keys())
+    log.info("Done video_id=%s sources=%s total=%d", video_id, sources, total)
+    return {"video_id": video_id, "token_count": total, "sources": sources}
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────
 
 @app.get("/", summary="Health check")
 def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/pubsub/whisper-completion", summary="Receive a Pub/Sub push notification for whisper-completion")
+@app.post("/tokenize", summary="Tokenize a single video")
+def tokenize(video_id: str) -> dict:
+    try:
+        return _process_video(video_id)
+    except Exception as exc:
+        log.error("tokenize failed video_id=%s: %s", video_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class BatchRequest(BaseModel):
+    video_ids: list[str]
+
+
+@app.post("/tokenize/batch", summary="Tokenize a batch of videos")
+def tokenize_batch(body: BatchRequest) -> dict:
+    processed: list[dict] = []
+    errors: list[dict] = []
+    for vid in body.video_ids:
+        try:
+            processed.append(_process_video(vid))
+        except Exception as exc:
+            log.error("tokenize failed video_id=%s: %s", vid, exc)
+            errors.append({"video_id": vid, "error": str(exc)})
+    return {"processed": processed, "errors": errors}
+
+
+@app.post("/pubsub/whisper-completion", summary="Legacy Pub/Sub push handler")
 async def pubsub_whisper_completion(request: Request) -> dict:
-    """Handle a Pub/Sub push envelope; tokenize the completed transcript."""
+    """Process a whisper-completion Pub/Sub push envelope."""
     envelope = await request.json()
     try:
         data     = base64.b64decode(envelope["message"]["data"])
@@ -107,68 +264,8 @@ async def pubsub_whisper_completion(request: Request) -> dict:
         return {"status": "skipped", "video_id": video_id}
 
     try:
-        result = _tokenize(video_id)
-    except HTTPException:
-        _publish_completion(video_id, "failed", 0, "")
-        raise
+        result = _process_video(video_id)
     except Exception as exc:
-        _publish_completion(video_id, "failed", 0, "")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    _publish_completion(video_id, "completed", result["token_count"], result["gcs_out"])
     return {"status": "ok", **result}
-
-
-def _tokenize(video_id: str) -> dict:
-    bucket  = _get_storage().bucket(_BUCKET_NAME)
-    in_path = f"{_IN_PREFIX}/{video_id}"
-    out_path = f"{_OUT_PREFIX}/{video_id}"
-
-    # ── Read ────────────────────────────────────────────────────────────────
-    blob_in = bucket.blob(in_path)
-    if not blob_in.exists():
-        raise HTTPException(status_code=404, detail=f"gs://{_BUCKET_NAME}/{in_path} not found.")
-
-    log.info("Reading gs://%s/%s", _BUCKET_NAME, in_path)
-    try:
-        text = blob_in.download_as_text()
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"GCS read failed: {exc}") from exc
-
-    # ── Tokenize ────────────────────────────────────────────────────────────
-    log.info("Tokenizing %d chars for video_id=%s", len(text), video_id)
-    doc    = _get_nlp()(text)
-    tokens = [token.text for token in doc if not token.is_space]
-
-    # ── Publish AA ──────────────────────────────────────────────────────────
-    _publish_aa(video_id, tokens)
-
-    # ── Write ───────────────────────────────────────────────────────────────
-    log.info("Writing %d tokens to gs://%s/%s", len(tokens), _BUCKET_NAME, out_path)
-    try:
-        bucket.blob(out_path).upload_from_string(
-            "\n".join(tokens), content_type="text/plain"
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"GCS write failed: {exc}") from exc
-
-    return {
-        "video_id":    video_id,
-        "token_count": len(tokens),
-        "gcs_in":      f"gs://{_BUCKET_NAME}/{in_path}",
-        "gcs_out":     f"gs://{_BUCKET_NAME}/{out_path}",
-    }
-
-
-@app.post("/tokenize", summary="Tokenize a narrative transcript stored in GCS")
-def tokenize(video_id: str) -> dict:
-    try:
-        result = _tokenize(video_id)
-    except HTTPException:
-        _publish_completion(video_id, "failed", 0, "")
-        raise
-    except Exception as exc:
-        _publish_completion(video_id, "failed", 0, "")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    _publish_completion(video_id, "completed", result["token_count"], result["gcs_out"])
-    return result
