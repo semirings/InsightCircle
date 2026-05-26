@@ -570,6 +570,8 @@ async def pubsub_ingest(request: Request) -> dict:
     keywords          = payload.get("keywords") or _DEFAULT_KEYWORDS
     max_results_per_q = int(payload.get("max_results_per_q", _RESULTS_PER_Q))
     max_total         = int(payload.get("max_total", _MAX_TOTAL_VIDEOS))
+    min_views: Optional[int] = int(payload["min_views"]) if payload.get("min_views") is not None else None
+    max_views: Optional[int] = int(payload["max_views"]) if payload.get("max_views") is not None else None
 
     log.info("Ingest job received", job_id=job_id, phase=phase,
              keyword_count=len(keywords), max_results_per_q=max_results_per_q,
@@ -590,6 +592,20 @@ async def pubsub_ingest(request: Request) -> dict:
 
         if phase in ("2", "all"):
             raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
+            if isinstance(raw, dict) and (min_views is not None or max_views is not None):
+                before = len(raw)
+                raw = {
+                    vid: rec for vid, rec in raw.items()
+                    if (min_views is None or rec.get("views", 0) >= min_views)
+                    and (max_views is None or rec.get("views", 0) <= max_views)
+                }
+                log.info("View filter applied", job_id=job_id,
+                         min_views=min_views, max_views=max_views,
+                         before=before, after=len(raw))
+                if raw:
+                    ndjson = "\n".join(json.dumps(r, ensure_ascii=False) for r in raw.values())
+                    _gcs_write(f"ingest-jobs/{job_id}/output.jsonl", ndjson,
+                               content_type="application/x-ndjson")
 
         if phase in ("3", "all"):
             phase3_uris = _phase3(job_id)

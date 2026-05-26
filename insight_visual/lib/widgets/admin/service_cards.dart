@@ -910,12 +910,12 @@ class _ITCardState extends State<ITCard> {
 
   void _selectAll() {
     setState(() => _selected..clear()..addAll(widget.videoIds));
-    _notify();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _notify());
   }
 
   void _clearAll() {
     setState(() => _selected.clear());
-    _notify();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _notify());
   }
 
   @override
@@ -1008,13 +1008,19 @@ class _ITCardState extends State<ITCard> {
   }
 }
 
-Widget _linkBtn(String label, VoidCallback onTap) => GestureDetector(
-      onTap: onTap,
-      child: Text(label,
-          style: const TextStyle(
-              color: kAdminBlue,
-              fontSize: 11,
-              decoration: TextDecoration.underline)),
+Widget _linkBtn(String label, VoidCallback onTap) => MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: Text(label,
+              style: const TextStyle(
+                  color: kAdminBlue,
+                  fontSize: 11,
+                  decoration: TextDecoration.underline)),
+        ),
+      ),
     );
 
 // ── IC — InsightCalc ───────────────────────────────────────────────────────

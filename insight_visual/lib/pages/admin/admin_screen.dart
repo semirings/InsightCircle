@@ -113,17 +113,18 @@ class _AdminScreenState extends State<AdminScreen> {
     if (bq == null) return;
     setState(() => _itVideoIdsLoading = true);
     try {
-      final rows = await bq.runQuery(
-        kGcpProject,
-        'SELECT DISTINCT id FROM `$kGcpProject.$kBqDataset.yt_metadata`'
-        ' ORDER BY id LIMIT 1000',
+      final rows = await bq.fetchTablePreview(
+        kGcpProject, kBqDataset, 'yt_metadata',
+        maxRows: 2000,
       );
       if (!mounted) return;
       setState(() {
         _itVideoIds = rows
             .map((r) => (r['id'] ?? '').toString())
             .where((s) => s.isNotEmpty)
-            .toList();
+            .toSet()
+            .toList()
+          ..sort();
         _itVideoIdsLoading = false;
       });
     } catch (_) {

@@ -397,20 +397,38 @@ queryYtMetadata(d4mQuery::String; chunkSize::Int=10_000)::Assoc =
 # video_id, and reconstructs the original Assoc.
 
 function queryAA(table::String, videoId::String;
+                 colPrefix::String="",
                  chunkSize::Int=100_000)::Assoc
     occursin(r"^[A-Za-z0-9_]+$", table) ||
         error("Invalid table name '$table'")
-    srv    = getServer()
-    sql    = """
+    srv         = getServer()
+    where_parts = String[]
+    params      = []
+
+    if videoId != ":"
+        push!(where_parts, "video_id = @video_id")
+        push!(params, Dict(
+            "name"           => "video_id",
+            "parameterType"  => Dict("type" => "STRING"),
+            "parameterValue" => Dict("value" => videoId),
+        ))
+    end
+
+    if !isempty(colPrefix)
+        push!(where_parts, "col LIKE @col_prefix")
+        push!(params, Dict(
+            "name"           => "col_prefix",
+            "parameterType"  => Dict("type" => "STRING"),
+            "parameterValue" => Dict("value" => colPrefix * "%"),
+        ))
+    end
+
+    where_sql = isempty(where_parts) ? "1=1" : join(where_parts, " AND ")
+    sql = """
         SELECT row, col, val
         FROM `$(srv.project).$(srv.dataset).$table`
-        WHERE video_id = @video_id
+        WHERE $where_sql
     """
-    params = [Dict(
-        "name"           => "video_id",
-        "parameterType"  => Dict("type" => "STRING"),
-        "parameterValue" => Dict("value" => videoId),
-    )]
     jobId   = _submitJob(srv.session, srv.project, sql; queryParameters=params)
     url     = "$_BQ_BASE/projects/$(srv.project)/queries/$jobId" *
               "?maxResults=$chunkSize&location=us-central1"
@@ -430,6 +448,9 @@ function queryAA(table::String, videoId::String;
     isempty(rowKeys) && return Assoc(String[], String[], String[])
     return Assoc(rowKeys, colKeys, vals)
 end
+
+queryAA(table::String, videoId::String, colFilter::StartsWith; kw...) =
+    queryAA(table, videoId; colPrefix=colFilter.inputString, kw...)
 
 # ── Script registry ───────────────────────────────────────────────────────────
 
@@ -490,17 +511,20 @@ mutable struct ICTable
     chunk_size :: Int
     job_id     :: Union{String, Nothing}
     page_token :: Union{String, Nothing}
+    eav        :: Bool   # true for EAV triple-store tables (tokens, ontology…)
 end
 
 """
-    getTable(table; row_key="id", chunk_size=10_000) -> ICTable
+    getTable(table; row_key="id", chunk_size=10_000, eav=false) -> ICTable
 
 Create a BQ-aware cursor for `table`. No query is issued until `T[query]` is called.
+Set `eav=true` for tables stored as (video_id, row, col, val) triples.
 """
-function getTable(table::String; row_key::String="id", chunk_size::Int=10_000)::ICTable
+function getTable(table::String; row_key::String="id",
+                  chunk_size::Int=10_000, eav::Bool=false)::ICTable
     occursin(r"^[A-Za-z0-9_]+$", table) ||
         error("Invalid table name '$table': only alphanumeric and underscore allowed")
-    ICTable(table, row_key, chunk_size, nothing, nothing)
+    ICTable(table, row_key, chunk_size, nothing, nothing, eav)
 end
 
 """
@@ -543,3 +567,22 @@ function Base.getindex(t::ICTable)::Union{Assoc, Nothing}
     t.page_token  = nextToken
     return aa
 end
+
+# Two-argument forms: EAV tables go through queryAA (SQL col prefix push-down);
+# regular tables fetch an Assoc first then filter in-memory.
+function Base.getindex(t::ICTable, row_query::String, col_filter::StartsWith)::Assoc
+    t.eav && return queryAA(t.table, row_query, col_filter)
+    t[row_query][":", col_filter]
+end
+
+function Base.getindex(t::ICTable, row_filter::StartsWith, col_query::String)::Assoc
+    t.eav && return queryAA(t.table, ":")[":", col_query][row_filter, ":"]
+    t[":"][row_filter, col_query]
+end
+
+function Base.getindex(t::ICTable, row_filter::StartsWith, col_filter::StartsWith)::Assoc
+    t.eav && return queryAA(t.table, ":", col_filter)[row_filter, ":"]
+    t[":"][row_filter, col_filter]
+end
+
+

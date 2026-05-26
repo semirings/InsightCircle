@@ -25,6 +25,8 @@ function aa2df(aa::Assoc)::DataFrame
     )
 end
 
+display(A::Assoc)::DataFrame = aa2df(A)
+
 # ── Assoc construction ────────────────────────────────────────────────────────
 
 # rowsToAssoc — generic row vector → Assoc for non-streaming use

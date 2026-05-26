@@ -17,7 +17,7 @@ include("automata.jl")
 include("algebra.jl")
 include("pubsub.jl")
 
-export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, aa2df, queryVideo, publishCompletion, queryAA
+export bqToMap, BQChunk, BQTable, BQServer, getServer, scan, BQResult, BQParam, toApiParams, queryYtMetadata, queryTable, queryTableChunk, ICTable, getTable, display, aa2df, queryVideo, publishCompletion, queryAA
 
 const START_TIME = Ref{DateTime}(now())
 
