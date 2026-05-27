@@ -9,6 +9,7 @@ class StepResult {
   final int? rowCount;
   final int? byteCount;
   final String? errorMessage;
+  final String? jobId;
 
   const StepResult({
     required this.stepId,
@@ -19,6 +20,7 @@ class StepResult {
     this.rowCount,
     this.byteCount,
     this.errorMessage,
+    this.jobId,
   });
 
   Duration? get duration => completedAt?.difference(startedAt);
@@ -35,6 +37,7 @@ class StepResult {
       rowCount: json['rowCount'] as int?,
       byteCount: json['byteCount'] as int?,
       errorMessage: json['errorMessage'] as String?,
+      jobId: json['jobId'] as String?,
     );
   }
 
@@ -47,5 +50,6 @@ class StepResult {
         if (rowCount != null) 'rowCount': rowCount,
         if (byteCount != null) 'byteCount': byteCount,
         if (errorMessage != null) 'errorMessage': errorMessage,
+        if (jobId != null) 'jobId': jobId,
       };
 }

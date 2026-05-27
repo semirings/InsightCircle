@@ -257,34 +257,41 @@ async def pubsub_ingest_completion(request: Request) -> dict:
     log.info("REQUEST: ingest-completion job_id=%s", job_id)
     total_nodes = total_rels = 0
 
-    try:
-        gcs_uri = payload.get("gcs_uri")
-        if gcs_uri:
-            log.info("Processing meta job_id=%s uri=%s", job_id, gcs_uri)
+    def _process_uri(uri: str, group_fn, table_free: str, table_gpc: str) -> tuple[int, int]:
+        try:
+            records = _load_ndjson(uri)
+            texts   = group_fn(records)
+            return _process_content(job_id, texts, table_free, table_gpc)
+        except Exception as exc:
+            log.warning("Skipping %s — %s", uri, exc)
+            return 0, 0
+
+    gcs_uri = payload.get("gcs_uri")
+    if gcs_uri:
+        log.info("Processing meta job_id=%s uri=%s", job_id, gcs_uri)
+        try:
             records = _load_ndjson(gcs_uri)
             texts   = _group_meta_text_by_video(records)
             n, r    = _process_content(job_id, texts, "ontology_meta", "ontology_meta_gpc")
             total_nodes += n; total_rels += r
+        except Exception as exc:
+            log.error("FAILED meta: ingest-completion job_id=%s error=%s", job_id, exc, exc_info=True)
+            _publish_ontology_completion(job_id, "failed", 0, 0, "")
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        comments_uri = payload.get("comments_uri")
-        if comments_uri:
-            log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)
-            records = _load_ndjson(comments_uri)
-            texts   = _group_text_by_video(records)
-            n, r    = _process_content(job_id, texts, "ontology_comments", "ontology_comments_gpc")
-            total_nodes += n; total_rels += r
+    comments_uri = payload.get("comments_uri")
+    if comments_uri:
+        log.info("Processing comments job_id=%s uri=%s", job_id, comments_uri)
+        n, r = _process_uri(comments_uri, _group_text_by_video,
+                            "ontology_comments", "ontology_comments_gpc")
+        total_nodes += n; total_rels += r
 
-        transcripts_uri = payload.get("transcripts_uri")
-        if transcripts_uri:
-            log.info("Processing transcripts job_id=%s uri=%s", job_id, transcripts_uri)
-            records = _load_ndjson(transcripts_uri)
-            texts   = _group_text_by_video(records)
-            n, r    = _process_content(job_id, texts, "ontology_transcripts", "ontology_transcripts_gpc")
-            total_nodes += n; total_rels += r
-    except Exception as exc:
-        log.error("FAILED: ingest-completion job_id=%s error=%s", job_id, exc, exc_info=True)
-        _publish_ontology_completion(job_id, "failed", 0, 0, "")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    transcripts_uri = payload.get("transcripts_uri")
+    if transcripts_uri:
+        log.info("Processing transcripts job_id=%s uri=%s", job_id, transcripts_uri)
+        n, r = _process_uri(transcripts_uri, _group_text_by_video,
+                            "ontology_transcripts", "ontology_transcripts_gpc")
+        total_nodes += n; total_rels += r
 
     log.info("DONE: ingest-completion job_id=%s total_nodes=%d total_rels=%d",
              job_id, total_nodes, total_rels)

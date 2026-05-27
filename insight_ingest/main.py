@@ -45,6 +45,7 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import ic_log
 from fastapi import FastAPI, HTTPException, Request
@@ -201,11 +202,82 @@ class _QuotaExceeded(Exception):
     """Raised when the YouTube Data API quota is exhausted."""
 
 
+def _write_quota_log(job_id: str, quota: dict) -> None:
+    """Write one row to quota_log. Failures are logged and swallowed."""
+    try:
+        row = {
+            "date":              datetime.now(timezone.utc).date().isoformat(),
+            "job_id":            job_id,
+            "keywords_searched": quota.get("keywords_searched", 0),
+            "search_calls":      quota.get("search_calls", 0),
+            "video_calls":       quota.get("video_calls", 0),
+            "comment_calls":     quota.get("comment_calls", 0),
+            "total_units":       quota.get("search_calls", 0) * 100
+                                 + quota.get("video_calls", 0)
+                                 + quota.get("comment_calls", 0),
+            "videos_fetched":    quota.get("videos_fetched", 0),
+            "videos_written":    quota.get("videos_written", 0),
+            "timestamp":         datetime.now(timezone.utc).isoformat(),
+        }
+        errors = _get_bq().insert_rows_json(
+            f"{os.environ.get('GCP_PROJECT', 'creator-d4m-2026-1774038056')}"
+            f".insight_metadata.quota_log",
+            [row],
+        )
+        if errors:
+            log.warning("quota_log insert errors", job_id=job_id, errors=str(errors))
+        else:
+            log.info("quota_log written", job_id=job_id,
+                     total_units=row["total_units"])
+    except Exception as exc:
+        log.warning("quota_log write failed — continuing", job_id=job_id, error=str(exc))
+
+
+def _write_video_tags(job_id: str, records: dict[str, dict]) -> None:
+    """Write (video_id, tag, job_id, ingested_at) rows to BQ video_tags. Failures are swallowed."""
+    project = os.environ.get("GCP_PROJECT", "creator-d4m-2026-1774038056")
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {"video_id": vid, "tag": tag.lower(), "job_id": job_id, "ingested_at": now}
+        for vid, rec in records.items()
+        for tag in (rec.get("tags") or [])
+        if tag.strip()
+    ]
+    if not rows:
+        log.info("_write_video_tags: no tags to write", job_id=job_id)
+        return
+    try:
+        errors = _get_bq().insert_rows_json(
+            f"{project}.insight_metadata.video_tags", rows
+        )
+        if errors:
+            log.warning("video_tags insert errors", job_id=job_id, errors=str(errors))
+        else:
+            log.info("video_tags written", job_id=job_id, row_count=len(rows))
+    except Exception as exc:
+        log.warning("video_tags write failed — continuing", job_id=job_id, error=str(exc))
+
+
 def _phase1(job_id: str, keywords: list[str],
             max_results_per_q: int = _RESULTS_PER_Q,
-            max_total: int = _MAX_TOTAL_VIDEOS) -> dict[str, str]:
+            max_total: int = _MAX_TOTAL_VIDEOS,
+            quota: Optional[dict] = None) -> dict[str, str]:
+    if quota is None:
+        quota = {}
+
+    # Idempotent: reuse ids.json if a previous attempt already completed Phase 1.
+    blob_name = f"{_JOBS_PREFIX}/{job_id}/ids.json"
+    bucket = _get_storage().bucket(_GCS_BUCKET)
+    if bucket.blob(blob_name).exists():
+        log.info("Phase 1 ids.json already exists — reusing", job_id=job_id)
+        raw = json.loads(bucket.blob(blob_name).download_as_text())
+        quota["videos_fetched"] = len(raw)
+        quota["keywords_searched"] = len(keywords)
+        return raw
+
     youtube = _get_youtube()
     log.info("Phase 1 start", job_id=job_id, keyword_count=len(keywords))
+    quota["keywords_searched"] = len(keywords)
     raw: dict[str, str] = {}
 
     published_after = (
@@ -236,6 +308,7 @@ def _phase1(job_id: str, keywords: list[str],
                 kwargs["pageToken"] = page_token
             try:
                 response = youtube.search().list(**kwargs).execute()
+                quota["search_calls"] = quota.get("search_calls", 0) + 1
             except HttpError as exc:
                 if exc.resp.status == 403 and "quotaExceeded" in str(exc):
                     log.warning("YouTube quota exceeded — aborting phase 1",
@@ -266,6 +339,7 @@ def _phase1(job_id: str, keywords: list[str],
     if not raw:
         raise HTTPException(status_code=500, detail="Phase 1 collected zero video IDs")
 
+    quota["videos_fetched"] = len(raw)
     blob_name = f"{_JOBS_PREFIX}/{job_id}/ids.json"
     _gcs_write(blob_name, json.dumps(raw, ensure_ascii=False))
     log.info("Phase 1 complete", job_id=job_id, video_count=len(raw))
@@ -274,7 +348,8 @@ def _phase1(job_id: str, keywords: list[str],
 
 # ── Comments helpers ──────────────────────────────────────────────────────────
 
-def _fetch_video_comments(youtube, video_id: str) -> list[dict]:
+def _fetch_video_comments(youtube, video_id: str,
+                          quota: Optional[dict] = None) -> list[dict]:
     """Return up to _COMMENTS_PER_VIDEO top-level comments for a single video."""
     results: list[dict] = []
     page_token: Optional[str] = None
@@ -291,6 +366,8 @@ def _fetch_video_comments(youtube, video_id: str) -> list[dict]:
             kwargs["pageToken"] = page_token
         try:
             resp = youtube.commentThreads().list(**kwargs).execute()
+            if quota is not None:
+                quota["comment_calls"] = quota.get("comment_calls", 0) + 1
         except HttpError as exc:
             if exc.resp.status == 403 and "commentsDisabled" in str(exc):
                 break  # silently skip videos with comments disabled
@@ -319,13 +396,14 @@ def _fetch_video_comments(youtube, video_id: str) -> list[dict]:
     return results
 
 
-def _phase2_comments(job_id: str, youtube, video_ids: list[str]) -> int:
+def _phase2_comments(job_id: str, youtube, video_ids: list[str],
+                     quota: Optional[dict] = None) -> int:
     """Fetch comments for all video_ids and write comments.jsonl to GCS. Returns comment count."""
     log.info("Phase 2 comments start", job_id=job_id, video_count=len(video_ids))
     all_comments: list[dict] = []
 
     for i, vid in enumerate(video_ids):
-        comments = _fetch_video_comments(youtube, vid)
+        comments = _fetch_video_comments(youtube, vid, quota=quota)
         all_comments.extend(comments)
         if (i + 1) % 50 == 0:
             log.info("Phase 2 comments progress",
@@ -425,7 +503,8 @@ def _build_record(video_id: str, fallback_title: str, item: dict) -> dict:
     }
 
 
-def _phase2(job_id: str, raw: Optional[dict[str, str]] = None) -> dict[str, dict]:
+def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
+            quota: Optional[dict] = None) -> dict[str, dict]:
     if raw is None:
         blob_name = f"{_JOBS_PREFIX}/{job_id}/ids.json"
         log.info("Phase 2 loading IDs from GCS", job_id=job_id, blob=blob_name)
@@ -462,6 +541,8 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None) -> dict[str, dict
                 detail=f"YouTube API error on batch {batch_num}: {exc}",
             ) from exc
 
+        if quota is not None:
+            quota["video_calls"] = quota.get("video_calls", 0) + 1
         for item in (response.get("items") or []):
             if not item:
                 continue
@@ -474,7 +555,7 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None) -> dict[str, dict
                content_type="application/x-ndjson")
     log.info("Phase 2 metadata complete", job_id=job_id, record_count=len(seen))
 
-    _phase2_comments(job_id, youtube, list(seen.keys()))
+    _phase2_comments(job_id, youtube, list(seen.keys()), quota=quota)
     _phase2_transcripts(job_id, list(seen.keys()))
     log.info("Phase 2 complete", job_id=job_id, record_count=len(seen))
     return seen
@@ -545,6 +626,72 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+def _extract_video_id(raw: str) -> Optional[str]:
+    """Parse a YouTube video ID from a URL in any common format, or return raw if it looks like an ID."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    if re.fullmatch(r'[A-Za-z0-9_-]{11}', raw):
+        return raw
+    try:
+        p = urlparse(raw)
+        if p.netloc in ('youtu.be', 'www.youtu.be'):
+            vid = p.path.lstrip('/').split('/')[0]
+            if re.fullmatch(r'[A-Za-z0-9_-]{11}', vid):
+                return vid
+        if 'youtube.com' in p.netloc:
+            qs = parse_qs(p.query)
+            if 'v' in qs:
+                vid = qs['v'][0]
+                if re.fullmatch(r'[A-Za-z0-9_-]{11}', vid):
+                    return vid
+            m = re.match(r'/(?:shorts|embed|v)/([A-Za-z0-9_-]{11})', p.path)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+@app.post("/seed/keywords", summary="Extract tags from YouTube videos by URL")
+async def seed_keywords(request: Request) -> dict:
+    body = await request.json()
+    urls: list = body.get("urls", [])
+    if not isinstance(urls, list):
+        raise HTTPException(status_code=400, detail="urls must be a list")
+
+    video_ids: list[str] = []
+    for u in urls:
+        vid = _extract_video_id(str(u))
+        if vid and vid not in video_ids:
+            video_ids.append(vid)
+
+    if not video_ids:
+        return {"keywords": [], "video_ids": []}
+
+    youtube   = _get_youtube()
+    all_tags: list[str] = []
+
+    for i in range(0, len(video_ids), _API_BATCH_SIZE):
+        chunk = video_ids[i:i + _API_BATCH_SIZE]
+        try:
+            resp = youtube.videos().list(
+                part="snippet",
+                id=",".join(chunk),
+                maxResults=_API_BATCH_SIZE,
+            ).execute()
+        except HttpError as exc:
+            log.warning("seed_keywords videos.list failed", error=str(exc))
+            continue
+        for item in (resp.get("items") or []):
+            all_tags.extend((item.get("snippet") or {}).get("tags") or [])
+
+    keywords = sorted({t.lower() for t in all_tags if t.strip()})
+    log.info("seed_keywords complete",
+             video_count=len(video_ids), keyword_count=len(keywords))
+    return {"keywords": keywords, "video_ids": video_ids}
+
+
 @app.post("/filter_known_ids", summary="Return video IDs already in insight_metadata")
 async def filter_known_ids(request: Request) -> dict:
     body = await request.json()
@@ -579,10 +726,11 @@ async def pubsub_ingest(request: Request) -> dict:
 
     raw:          Optional[dict[str, str]]         = None
     phase3_uris:  Optional[dict[str, Optional[str]]] = None
+    quota: dict = {}
 
     try:
         if phase in ("1", "all"):
-            raw = _phase1(job_id, keywords, max_results_per_q, max_total)
+            raw = _phase1(job_id, keywords, max_results_per_q, max_total, quota=quota)
             known = _query_known_ids(list(raw.keys()))
             if known:
                 log.info("Filtering known video IDs", job_id=job_id,
@@ -591,7 +739,7 @@ async def pubsub_ingest(request: Request) -> dict:
                 log.info("Filtered result", job_id=job_id, after=len(raw))
 
         if phase in ("2", "all"):
-            raw = _phase2(job_id, raw)  # raw is None if phase="2" alone; _phase2 loads from GCS
+            raw = _phase2(job_id, raw, quota=quota)
             if isinstance(raw, dict) and (min_views is not None or max_views is not None):
                 before = len(raw)
                 raw = {
@@ -607,6 +755,11 @@ async def pubsub_ingest(request: Request) -> dict:
                     _gcs_write(f"ingest-jobs/{job_id}/output.jsonl", ndjson,
                                content_type="application/x-ndjson")
 
+        if isinstance(raw, dict):
+            quota["videos_written"] = len(raw)
+            if phase in ("2", "all"):
+                _write_video_tags(job_id, raw)
+
         if phase in ("3", "all"):
             phase3_uris = _phase3(job_id)
             if phase3_uris:
@@ -620,6 +773,8 @@ async def pubsub_ingest(request: Request) -> dict:
     gcs_uri         = (phase3_uris or {}).get("gcs_uri")
     comments_uri    = (phase3_uris or {}).get("comments_uri")
     transcripts_uri = (phase3_uris or {}).get("transcripts_uri")
+
+    _write_quota_log(job_id, quota)
 
     log.info("Ingest job complete", job_id=job_id, phase=phase,
              gcs_uri=gcs_uri, comments_uri=comments_uri, transcripts_uri=transcripts_uri)

@@ -3,8 +3,9 @@ import '../models/pipeline_step.dart';
 const kGcpProject  = 'creator-d4m-2026-1774038056';
 const kBqDataset   = 'insight_metadata';
 const kGcsBucket   = 'insightcircle_bucket';
-const kCalcService  = 'insight-calc';
-const kTokenService = 'insight-token';
+const kCalcService    = 'insight-calc';
+const kTokenService   = 'insight-token';
+const kIngestService  = 'insight-ingest';
 const kRegion      = 'us-central1';
 
 const kPipelineSteps = <PipelineStep>[

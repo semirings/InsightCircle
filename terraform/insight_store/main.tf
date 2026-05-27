@@ -198,6 +198,42 @@ resource "google_bigquery_table" "ontology_threads_gpc" {
   schema              = local.aa_table_schema
 }
 
+# ── BigQuery video tags table ────────────────────────────────────────────────
+
+resource "google_bigquery_table" "video_tags" {
+  dataset_id          = "insight_metadata"
+  table_id            = "video_tags"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "video_id",    type = "STRING",    mode = "REQUIRED", description = "YouTube video identifier" },
+    { name = "tag",         type = "STRING",    mode = "REQUIRED", description = "Tag assigned by the video creator (lowercased)" },
+    { name = "job_id",      type = "STRING",    mode = "REQUIRED", description = "Ingest job that produced this row" },
+    { name = "ingested_at", type = "TIMESTAMP", mode = "REQUIRED", description = "When this row was written" },
+  ])
+}
+
+# ── BigQuery quota log table ──────────────────────────────────────────────────
+
+resource "google_bigquery_table" "quota_log" {
+  dataset_id          = "insight_metadata"
+  table_id            = "quota_log"
+  deletion_protection = false
+
+  schema = jsonencode([
+    { name = "date",                type = "DATE",      mode = "REQUIRED", description = "UTC date of the ingest run" },
+    { name = "job_id",              type = "STRING",    mode = "REQUIRED", description = "Ingest job identifier" },
+    { name = "keywords_searched",   type = "INTEGER",   mode = "NULLABLE", description = "Number of keywords searched" },
+    { name = "search_calls",        type = "INTEGER",   mode = "NULLABLE", description = "Number of search.list API calls" },
+    { name = "video_calls",         type = "INTEGER",   mode = "NULLABLE", description = "Number of videos.list API calls" },
+    { name = "comment_calls",       type = "INTEGER",   mode = "NULLABLE", description = "Number of commentThreads.list API calls" },
+    { name = "total_units",         type = "INTEGER",   mode = "NULLABLE", description = "Total YouTube Data API quota units consumed" },
+    { name = "videos_fetched",      type = "INTEGER",   mode = "NULLABLE", description = "Videos collected before dedup/filter" },
+    { name = "videos_written",      type = "INTEGER",   mode = "NULLABLE", description = "Videos written after all filters" },
+    { name = "timestamp",           type = "TIMESTAMP", mode = "REQUIRED", description = "When this row was written" },
+  ])
+}
+
 # ── BigQuery completion event tables ─────────────────────────────────────────
 
 resource "google_bigquery_table" "token_completion" {

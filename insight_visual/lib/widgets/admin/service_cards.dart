@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../../theme.dart';
 
-typedef RunCallback          = void Function(Map<String, String> params);
-typedef ParamsChangedCallback = void Function(Map<String, String> params);
+typedef RunCallback            = void Function(Map<String, String> params);
+typedef ParamsChangedCallback  = void Function(Map<String, String> params);
+typedef FetchKeywordsCallback  = Future<List<String>> Function(List<String> urls);
 
 // ── Shared card chrome ─────────────────────────────────────────────────────
 
@@ -331,7 +332,7 @@ class _FieldRow extends StatelessWidget {
             child: Text(
               label,
               style: inter(
-                  fontSize: 9,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: kAdminTextDim,
                   letterSpacing: 0.5),
@@ -405,7 +406,7 @@ class _ToggleRow extends StatelessWidget {
             width: 70,
             child: Text(label,
                 style: inter(
-                    fontSize: 9,
+                    fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: kAdminTextDim,
                     letterSpacing: 0.5)),
@@ -595,11 +596,13 @@ class IICard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
+  final FetchKeywordsCallback? onFetchKeywords;
 
   const IICard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
+    this.onFetchKeywords,
     this.running = false,
   });
 
@@ -610,12 +613,14 @@ class IICard extends StatefulWidget {
 class _IICardState extends State<IICard> {
   String        _phase          = 'all';
   final List<String>  _keywords  = [];
-  final _count  = TextEditingController();
+  final _count    = TextEditingController();
   final _minViews = TextEditingController();
   final _maxViews = TextEditingController();
   final _minSubs  = TextEditingController();
   final _maxSubs  = TextEditingController();
-  bool  _skipDuplicates = true;
+  final _seedUrlCtrl = TextEditingController();
+  bool  _skipDuplicates   = true;
+  bool  _fetchingKeywords = false;
 
   bool           _floating = false;
   OverlayEntry?  _overlay;
@@ -666,6 +671,32 @@ class _IICardState extends State<IICard> {
     if (mounted) setState(() => _floating = false);
   }
 
+  Future<void> _fetchSeedKeywords() async {
+    final fn = widget.onFetchKeywords;
+    if (fn == null) return;
+    final urls = _seedUrlCtrl.text
+        .split('\n')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (urls.isEmpty) return;
+    _update(() => _fetchingKeywords = true);
+    try {
+      final keywords = await fn(urls);
+      _update(() {
+        for (final kw in keywords) {
+          if (!_keywords.contains(kw)) _keywords.add(kw);
+        }
+        _seedUrlCtrl.clear();
+      });
+      _notify();
+    } catch (_) {
+      // ignore
+    } finally {
+      if (mounted) _update(() => _fetchingKeywords = false);
+    }
+  }
+
   @override
   void dispose() {
     _overlay?.remove();
@@ -674,6 +705,7 @@ class _IICardState extends State<IICard> {
     _maxViews.dispose();
     _minSubs.dispose();
     _maxSubs.dispose();
+    _seedUrlCtrl.dispose();
     super.dispose();
   }
 
@@ -739,6 +771,74 @@ class _IICardState extends State<IICard> {
             chips:    _keywords,
             onAdd:    (kw) { _update(() => _keywords.add(kw)); _notify(); },
             onRemove: (i)  { _update(() => _keywords.removeAt(i)); _notify(); },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('SEED URLS',
+                  style: inter(fontSize: 11, fontWeight: FontWeight.w700,
+                      color: kAdminTextDim, letterSpacing: 0.5)),
+              const SizedBox(height: 3),
+              Container(
+                height: 54,
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: kAdminSurfaceLow,
+                  border: Border.all(color: kAdminBorder),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: TextField(
+                  controller: _seedUrlCtrl,
+                  maxLines: null,
+                  style: inter(fontSize: 9, color: kAdminText),
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'paste YouTube URLs, one per line…',
+                    hintStyle: inter(fontSize: 9, color: kAdminTextDim),
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 3),
+              MouseRegion(
+                cursor: (_fetchingKeywords || widget.onFetchKeywords == null)
+                    ? SystemMouseCursors.basic
+                    : SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: (_fetchingKeywords || widget.onFetchKeywords == null)
+                      ? null
+                      : _fetchSeedKeywords,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: kAdminSurfaceLow,
+                      border: Border.all(color: kAdminBorder),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: _fetchingKeywords
+                        ? const SizedBox(
+                            width: 10, height: 10,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 1.5, color: kAdminAccent),
+                          )
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.label_outline,
+                                  size: 10, color: kAdminTextDim),
+                              const SizedBox(width: 4),
+                              Text('Fetch Keywords',
+                                  style: inter(fontSize: 9, color: kAdminTextMuted)),
+                            ],
+                          ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         _FieldRow(
@@ -830,7 +930,17 @@ class _I2CardState extends State<I2Card> {
     super.didUpdateWidget(oldWidget);
     if (widget.externalJobId != null &&
         widget.externalJobId != oldWidget.externalJobId) {
-      _jobId.text = widget.externalJobId!;
+      final id = widget.externalJobId!;
+      final now = DateTime.now().toUtc();
+      final date = '${now.year}-'
+          '${now.month.toString().padLeft(2, '0')}-'
+          '${now.day.toString().padLeft(2, '0')}';
+      _jobId.text = id;
+      if (_date.text.isEmpty) _date.text = date;
+      final d = _date.text;
+      _metaUri.text        = 'gs://insightcircle_bucket/ingest/$d/${id}_meta.jsonl';
+      _commentsUri.text    = 'gs://insightcircle_bucket/ingest/$d/${id}_comments.jsonl';
+      _transcriptsUri.text = 'gs://insightcircle_bucket/ingest/$d/${id}_transcripts.jsonl';
       _notify();
     }
   }

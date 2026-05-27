@@ -261,6 +261,7 @@ class _AdminScreenState extends State<AdminScreen> {
           startedAt:   stepStarted,
           completedAt: DateTime.now(),
           status:      status,
+          jobId:       step.id == 'II' ? _activeJobId : null,
         ));
         if (status != ExecutionStatus.succeeded) {
           for (final rem
@@ -330,6 +331,41 @@ class _AdminScreenState extends State<AdminScreen> {
       _logs        = [];
     });
     _fetchLogs(run.executionId);
+    if (run.stepId == 'II' && run.jobId != null) {
+      _fetchQuota(run.jobId!);
+    }
+  }
+
+  Future<void> _fetchQuota(String jobId) async {
+    final bq = _bigQuery;
+    if (bq == null) return;
+    try {
+      final rows = await bq.fetchTablePreview(
+        kGcpProject, kBqDataset, 'quota_log', maxRows: 200,
+      );
+      final matching = rows
+          .where((r) => r['job_id']?.toString() == jobId)
+          .toList();
+      if (!mounted) return;
+      if (matching.isNotEmpty) {
+        setState(() => _stepPreview['II'] = matching
+            .map((r) => r.map((k, v) => MapEntry(k, v ?? '')))
+            .toList());
+      } else {
+        // Show today's full daily summary if job row not yet written.
+        final today = DateTime.now().toLocal();
+        final todayStr =
+            '${today.year}-${today.month.toString().padLeft(2,'0')}-${today.day.toString().padLeft(2,'0')}';
+        final todayRows = rows
+            .where((r) => r['date']?.toString() == todayStr)
+            .toList();
+        if (mounted && todayRows.isNotEmpty) {
+          setState(() => _stepPreview['II'] = todayRows
+              .map((r) => r.map((k, v) => MapEntry(k, v ?? '')))
+              .toList());
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _fetchLogs(String executionId) async {
@@ -1014,7 +1050,7 @@ class _PreviewGridState extends State<_PreviewGrid> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
             child: Text(cols[i],
-              style: inter(fontSize: 9, fontWeight: FontWeight.w700,
+              style: inter(fontSize: 11, fontWeight: FontWeight.w700,
                   color: kAdminTextDim, letterSpacing: 0.4),
               overflow: TextOverflow.ellipsis,
             ),
@@ -1203,7 +1239,7 @@ class _KV extends StatelessWidget {
         children: [
           Text(label.toUpperCase(),
               style: inter(
-                  fontSize: 9,
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
                   color: kAdminTextDim,
                   letterSpacing: 0.8)),
