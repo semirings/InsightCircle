@@ -1,12 +1,79 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../../models/execution_status.dart';
+import '../../models/step_result.dart';
 import '../../theme.dart';
 
 typedef RunCallback            = void Function(Map<String, String> params);
 typedef ParamsChangedCallback  = void Function(Map<String, String> params);
 typedef FetchKeywordsCallback  = Future<List<String>> Function(List<String> urls);
+
+// ── Per-card status indicator (elapsed timer + result badge) ──────────
+
+class _CardStatus extends StatefulWidget {
+  final bool       running;
+  final StepResult? lastResult;
+  const _CardStatus({required this.running, this.lastResult});
+  @override
+  State<_CardStatus> createState() => _CardStatusState();
+}
+
+class _CardStatusState extends State<_CardStatus> {
+  Timer? _timer;
+  int    _elapsed = 0;
+
+  @override
+  void didUpdateWidget(_CardStatus old) {
+    super.didUpdateWidget(old);
+    if (widget.running && !old.running) {
+      _elapsed = 0;
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() => _elapsed++);
+      });
+    } else if (!widget.running) {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  String _fmt(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return m > 0 ? '${m}m ${s.toString().padLeft(2, '0')}s' : '${s}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.running) {
+      return Text(_fmt(_elapsed),
+          style: inter(fontSize: 9, color: kAdminTextMuted));
+    }
+    final r = widget.lastResult;
+    if (r == null) return const SizedBox.shrink();
+    final ok    = r.status == ExecutionStatus.succeeded;
+    final color = ok ? kAdminGreen : kAdminAccent;
+    final dur   = r.duration;
+    final label = (!ok && r.errorMessage != null)
+        ? r.errorMessage!.substring(0, r.errorMessage!.length.clamp(0, 28))
+        : (dur != null ? _fmt(dur.inSeconds) : (ok ? 'ok' : 'failed'));
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(ok ? Icons.check_circle_outline : Icons.error_outline,
+          size: 10, color: color),
+      const SizedBox(width: 3),
+      Text(label, style: inter(fontSize: 9, color: color)),
+    ]);
+  }
+}
 
 // ── Shared card chrome ─────────────────────────────────────────────────────
 
@@ -19,6 +86,7 @@ class ServiceCard extends StatelessWidget {
   final bool expandable;
   final bool isExpanded;
   final VoidCallback? onExpandToggle;
+  final StepResult? lastResult;
 
   const ServiceCard({
     super.key,
@@ -30,6 +98,7 @@ class ServiceCard extends StatelessWidget {
     this.expandable  = false,
     this.isExpanded  = false,
     this.onExpandToggle,
+    this.lastResult,
   });
 
   @override
@@ -107,13 +176,15 @@ class ServiceCard extends StatelessWidget {
         const SizedBox(width: 6),
         Text(title, style: spaceGrotesk(fontSize: 11, color: kAdminText)),
         const Spacer(),
-        if (running)
+        if (running) ...[
           const SizedBox(
-            width: 10,
-            height: 10,
+            width: 10, height: 10,
             child: CircularProgressIndicator(
                 strokeWidth: 1.5, color: kAdminAccent),
           ),
+          const SizedBox(width: 6),
+        ],
+        _CardStatus(running: running, lastResult: lastResult),
       ],
     );
   }
@@ -597,6 +668,7 @@ class IICard extends StatefulWidget {
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
   final FetchKeywordsCallback? onFetchKeywords;
+  final StepResult? lastResult;
 
   const IICard({
     super.key,
@@ -604,6 +676,7 @@ class IICard extends StatefulWidget {
     this.onParamsChanged,
     this.onFetchKeywords,
     this.running = false,
+    this.lastResult,
   });
 
   @override
@@ -883,6 +956,7 @@ class _IICardState extends State<IICard> {
       isExpanded:      _floating,
       onExpandToggle:  _floating ? _collapse : () => _expand(context),
       onRun:           () => widget.onRun(_params),
+      lastResult:      widget.lastResult,
       body:            _buildCollapsedBody(),
     );
   }
@@ -895,6 +969,7 @@ class I2Card extends StatefulWidget {
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
   final String? externalJobId;
+  final StepResult? lastResult;
 
   const I2Card({
     super.key,
@@ -902,6 +977,7 @@ class I2Card extends StatefulWidget {
     this.onParamsChanged,
     this.running = false,
     this.externalJobId,
+    this.lastResult,
   });
 
   @override
@@ -958,10 +1034,11 @@ class _I2CardState extends State<I2Card> {
   @override
   Widget build(BuildContext context) {
     return ServiceCard(
-      serviceId: 'I2',
-      title:     'Ontology',
-      running:   widget.running,
-      onRun:     () => widget.onRun(_params),
+      serviceId:  'I2',
+      title:      'Ontology',
+      running:    widget.running,
+      lastResult: widget.lastResult,
+      onRun:      () => widget.onRun(_params),
       body: Column(
         children: [
           _FieldRow(
@@ -998,6 +1075,7 @@ class ITCard extends StatefulWidget {
   final ParamsChangedCallback? onParamsChanged;
   final List<String> videoIds;
   final bool videoIdsLoading;
+  final StepResult? lastResult;
 
   const ITCard({
     super.key,
@@ -1006,6 +1084,7 @@ class ITCard extends StatefulWidget {
     this.running = false,
     this.videoIds = const [],
     this.videoIdsLoading = false,
+    this.lastResult,
   });
 
   @override
@@ -1032,10 +1111,11 @@ class _ITCardState extends State<ITCard> {
   Widget build(BuildContext context) {
     const muted = TextStyle(color: kAdminTextMuted, fontSize: 11);
     return ServiceCard(
-      serviceId: 'IT',
-      title:     'Token',
-      running:   widget.running,
-      onRun:     () => widget.onRun(_params),
+      serviceId:  'IT',
+      title:      'Token',
+      running:    widget.running,
+      lastResult: widget.lastResult,
+      onRun:      () => widget.onRun(_params),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1140,6 +1220,7 @@ class ICCard extends StatefulWidget {
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
   final List<Map<String, String>> scripts;
+  final StepResult? lastResult;
 
   const ICCard({
     super.key,
@@ -1147,6 +1228,7 @@ class ICCard extends StatefulWidget {
     this.onParamsChanged,
     this.running = false,
     this.scripts = const [],
+    this.lastResult,
   });
 
   @override
@@ -1181,10 +1263,11 @@ class _ICCardState extends State<ICCard> {
   @override
   Widget build(BuildContext context) {
     return ServiceCard(
-      serviceId: 'IC',
-      title:     'Calc',
-      running:   widget.running,
-      onRun:     () => widget.onRun(_params),
+      serviceId:  'IC',
+      title:      'Calc',
+      running:    widget.running,
+      lastResult: widget.lastResult,
+      onRun:      () => widget.onRun(_params),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1240,6 +1323,7 @@ class ISCard extends StatefulWidget {
   final ParamsChangedCallback? onParamsChanged;
   final List<String> tables;
   final bool tablesLoading;
+  final StepResult? lastResult;
 
   const ISCard({
     super.key,
@@ -1248,6 +1332,7 @@ class ISCard extends StatefulWidget {
     this.onParamsChanged,
     this.running = false,
     this.tablesLoading = false,
+    this.lastResult,
   });
 
   @override
@@ -1303,10 +1388,11 @@ class _ISCardState extends State<ISCard> {
   @override
   Widget build(BuildContext context) {
     return ServiceCard(
-      serviceId: 'IS',
-      title:     'Store',
-      running:   widget.running,
-      onRun:     () => widget.onRun(_params),
+      serviceId:  'IS',
+      title:      'Store',
+      running:    widget.running,
+      lastResult: widget.lastResult,
+      onRun:      () => widget.onRun(_params),
       body: _FieldRow(
         label: 'Table',
         field: _tableField(),
@@ -1321,12 +1407,14 @@ class IWCard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
+  final StepResult? lastResult;
 
   const IWCard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
     this.running = false,
+    this.lastResult,
   });
 
   @override
@@ -1348,10 +1436,11 @@ class _IWCardState extends State<IWCard> {
   @override
   Widget build(BuildContext context) {
     return ServiceCard(
-      serviceId: 'IW',
-      title:     'Whisper',
-      running:   widget.running,
-      onRun:     () => widget.onRun(_params),
+      serviceId:  'IW',
+      title:      'Whisper',
+      running:    widget.running,
+      lastResult: widget.lastResult,
+      onRun:      () => widget.onRun(_params),
       body: _FieldRow(
         label: 'Video ID',
         field: _inputField(_videoId,

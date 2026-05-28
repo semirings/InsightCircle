@@ -49,7 +49,7 @@ resource "google_pubsub_subscription" "store_whisper_completion_sub" {
   ack_deadline_seconds = 60
 
   push_config {
-    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/whisper-completion"
+    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/completion/whisper-completion"
 
     oidc_token {
       service_account_email = google_service_account.insight_store.email
@@ -66,7 +66,7 @@ resource "google_pubsub_subscription" "store_token_completion_sub" {
   ack_deadline_seconds = 60
 
   push_config {
-    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/token-completion"
+    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/completion/token-completion"
 
     oidc_token {
       service_account_email = google_service_account.insight_store.email
@@ -83,7 +83,7 @@ resource "google_pubsub_subscription" "store_ontology_completion_sub" {
   ack_deadline_seconds = 60
 
   push_config {
-    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/ontology-completion"
+    push_endpoint = "https://insight-store-b5mjto3bjq-uc.a.run.app/pubsub/completion/ontology-completion"
 
     oidc_token {
       service_account_email = google_service_account.insight_store.email
@@ -213,26 +213,6 @@ resource "google_bigquery_table" "video_tags" {
   ])
 }
 
-# ── BigQuery quota log table ──────────────────────────────────────────────────
-
-resource "google_bigquery_table" "quota_log" {
-  dataset_id          = "insight_metadata"
-  table_id            = "quota_log"
-  deletion_protection = false
-
-  schema = jsonencode([
-    { name = "date",                type = "DATE",      mode = "REQUIRED", description = "UTC date of the ingest run" },
-    { name = "job_id",              type = "STRING",    mode = "REQUIRED", description = "Ingest job identifier" },
-    { name = "keywords_searched",   type = "INTEGER",   mode = "NULLABLE", description = "Number of keywords searched" },
-    { name = "search_calls",        type = "INTEGER",   mode = "NULLABLE", description = "Number of search.list API calls" },
-    { name = "video_calls",         type = "INTEGER",   mode = "NULLABLE", description = "Number of videos.list API calls" },
-    { name = "comment_calls",       type = "INTEGER",   mode = "NULLABLE", description = "Number of commentThreads.list API calls" },
-    { name = "total_units",         type = "INTEGER",   mode = "NULLABLE", description = "Total YouTube Data API quota units consumed" },
-    { name = "videos_fetched",      type = "INTEGER",   mode = "NULLABLE", description = "Videos collected before dedup/filter" },
-    { name = "videos_written",      type = "INTEGER",   mode = "NULLABLE", description = "Videos written after all filters" },
-    { name = "timestamp",           type = "TIMESTAMP", mode = "REQUIRED", description = "When this row was written" },
-  ])
-}
 
 # ── BigQuery completion event tables ─────────────────────────────────────────
 

@@ -65,15 +65,16 @@ class PubSubService {
     String? commentsUri,
     String? transcriptsUri,
   }) async {
-    final id  = jobId ?? _newId();
-    final meta = metaUri ?? 'gs://$kGcsBucket/ingest/$date/${id}_meta.jsonl';
+    final id   = jobId ?? _newId();
+    final base = date.isNotEmpty ? 'gs://$kGcsBucket/ingest/$date/$id' : null;
+    final meta     = (metaUri?.isNotEmpty        == true) ? metaUri!        : '${base}_meta.jsonl';
+    final comments = (commentsUri?.isNotEmpty    == true) ? commentsUri!    : base != null ? '${base}_comments.jsonl'    : null;
+    final transcripts = (transcriptsUri?.isNotEmpty == true) ? transcriptsUri! : base != null ? '${base}_transcripts.jsonl' : null;
     final payload = <String, dynamic>{
-      'job_id': id,
-      'gcs_uri': meta,
-      if (commentsUri != null && commentsUri.isNotEmpty)
-        'comments_uri': commentsUri,
-      if (transcriptsUri != null && transcriptsUri.isNotEmpty)
-        'transcripts_uri': transcriptsUri,
+      'job_id':   id,
+      'gcs_uri':  meta,
+      'comments_uri':    ?comments,
+      'transcripts_uri': ?transcripts,
     };
     await publish('ingest-completion', payload);
   }

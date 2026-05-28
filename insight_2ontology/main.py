@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from fastapi import FastAPI, HTTPException, Request
 from google.cloud import pubsub_v1, storage
 from langchain_core.documents import Document
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 
 _BUCKET_NAME               = "insightcircle_bucket"
 _NARRATIVE_PREFIX          = "narrative"
@@ -80,7 +81,7 @@ def _get_transformer_free() -> LLMGraphTransformer:
     global _transformer_free
     if _transformer_free is None:
         log.info("INIT: loading free-form LLMGraphTransformer model=%s", _LLM_MODEL)
-        llm = ChatGoogleGenerativeAI(model=_LLM_MODEL)
+        llm = ChatVertexAI(model=_LLM_MODEL, project=_GCP_PROJECT, location="us-central1")
         _transformer_free = LLMGraphTransformer(llm=llm)
         log.info("INIT: free-form transformer ready")
     return _transformer_free
@@ -92,7 +93,7 @@ def _get_transformer_gpc() -> LLMGraphTransformer | None:
         return None
     if _transformer_gpc is None:
         log.info("INIT: loading GPC LLMGraphTransformer model=%s titles=%d", _LLM_MODEL, len(_GPC_TITLES))
-        llm = ChatGoogleGenerativeAI(model=_LLM_MODEL)
+        llm = ChatVertexAI(model=_LLM_MODEL, project=_GCP_PROJECT, location="us-central1")
         _transformer_gpc = LLMGraphTransformer(
             llm=llm,
             allowed_nodes=_GPC_TITLES,
@@ -187,33 +188,69 @@ def _publish_ontology_completion(video_id: str, status: str,
 
 # ── Multi-video content processor ────────────────────────────────────────────
 
+_PARALLEL_WORKERS = int(os.getenv("I2_PARALLEL_WORKERS", "3"))
+
+
+def _llm_convert(transformer, docs: list, retries: int = 4) -> list:
+    """Call convert_to_graph_documents with exponential backoff on 429."""
+    delay = 10
+    for attempt in range(retries):
+        try:
+            return transformer.convert_to_graph_documents(docs)
+        except Exception as exc:
+            if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
+                if attempt < retries - 1:
+                    log.warning("Vertex AI 429 — backing off %ds (attempt %d)",
+                                delay, attempt + 1)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+            raise
+    return []
+
+
+def _process_one_video(video_id: str, text: str,
+                       table_free: str, table_gpc: str) -> tuple[int, int]:
+    if not text.strip():
+        return 0, 0
+    docs = [Document(page_content=text)]
+    graph_docs_free = _llm_convert(_get_transformer_free(), docs)
+    _publish_aa(_graph_docs_to_aa(video_id, graph_docs_free, table_free))
+    nodes = sum(len(gd.nodes) for gd in graph_docs_free)
+    rels  = sum(len(gd.relationships) for gd in graph_docs_free)
+    transformer_gpc = _get_transformer_gpc()
+    if transformer_gpc:
+        graph_docs_gpc = _llm_convert(transformer_gpc, docs)
+        _publish_aa(_graph_docs_to_aa(video_id, graph_docs_gpc, table_gpc))
+    return nodes, rels
+
+
 def _process_content(
     job_id: str,
     texts_by_video: dict[str, str],
     table_free: str,
     table_gpc: str,
 ) -> tuple[int, int]:
-    """Run both transformers over per-video texts and publish AA to BQ via aa-ingest."""
-    total_nodes = 0
-    total_rels  = 0
+    """Run both transformers over per-video texts in parallel and publish AA."""
+    total_nodes = total_rels = 0
+    items = [(vid, txt) for vid, txt in texts_by_video.items() if txt.strip()]
 
-    for video_id, text in texts_by_video.items():
-        if not text.strip():
-            continue
-        docs = [Document(page_content=text)]
-
-        graph_docs_free = _get_transformer_free().convert_to_graph_documents(docs)
-        _publish_aa(_graph_docs_to_aa(video_id, graph_docs_free, table_free))
-        total_nodes += sum(len(gd.nodes) for gd in graph_docs_free)
-        total_rels  += sum(len(gd.relationships) for gd in graph_docs_free)
-
-        transformer_gpc = _get_transformer_gpc()
-        if transformer_gpc:
-            graph_docs_gpc = transformer_gpc.convert_to_graph_documents(docs)
-            _publish_aa(_graph_docs_to_aa(video_id, graph_docs_gpc, table_gpc))
+    with ThreadPoolExecutor(max_workers=_PARALLEL_WORKERS) as pool:
+        futures = {
+            pool.submit(_process_one_video, vid, txt, table_free, table_gpc): vid
+            for vid, txt in items
+        }
+        for fut in as_completed(futures):
+            try:
+                n, r = fut.result()
+                total_nodes += n
+                total_rels  += r
+            except Exception as exc:
+                log.warning("_process_one_video failed video_id=%s error=%s",
+                            futures[fut], exc)
 
     log.info("_process_content done job_id=%s table=%s videos=%d nodes=%d rels=%d",
-             job_id, table_free, len(texts_by_video), total_nodes, total_rels)
+             job_id, table_free, len(items), total_nodes, total_rels)
     return total_nodes, total_rels
 
 

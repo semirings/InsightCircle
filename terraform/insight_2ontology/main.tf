@@ -137,16 +137,6 @@ resource "google_cloud_run_v2_service" "insight_2ontology" {
         value = var.llm_model
       }
 
-      env {
-        name = "GOOGLE_API_KEY"
-        value_source {
-          secret_key_ref {
-            secret  = "google-api-key"
-            version = "latest"
-          }
-        }
-      }
-
       resources {
         limits = {
           cpu    = "2"
@@ -156,7 +146,7 @@ resource "google_cloud_run_v2_service" "insight_2ontology" {
     }
 
     # LLM calls can take 30-120s for long narratives
-    timeout = "300s"
+    timeout = "3600s"
   }
 }
 

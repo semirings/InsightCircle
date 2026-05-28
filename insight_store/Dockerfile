@@ -5,6 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ic_log is at the repo root — bld.sh copies it here before building
+COPY ic_log/ ic_log/
 COPY main.py .
 
 EXPOSE 8080
