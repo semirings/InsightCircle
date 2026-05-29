@@ -686,12 +686,13 @@ class IICard extends StatefulWidget {
 class _IICardState extends State<IICard> {
   String        _phase          = 'all';
   final List<String>  _keywords  = [];
-  final _count    = TextEditingController();
-  final _minViews = TextEditingController();
-  final _maxViews = TextEditingController();
-  final _minSubs  = TextEditingController();
-  final _maxSubs  = TextEditingController();
-  final _seedUrlCtrl = TextEditingController();
+  final _count       = TextEditingController();
+  final _minViews    = TextEditingController();
+  final _maxViews    = TextEditingController();
+  final _minSubs     = TextEditingController();
+  final _maxSubs     = TextEditingController();
+  final _seedUrlCtrl   = TextEditingController();
+  final _directUrlCtrl = TextEditingController();
   bool  _skipDuplicates   = true;
   bool  _fetchingKeywords = false;
 
@@ -707,6 +708,7 @@ class _IICardState extends State<IICard> {
         'minSubscribers':  _minSubs.text,
         'maxSubscribers':  _maxSubs.text,
         'skipDuplicates':  _skipDuplicates.toString(),
+        'directUrls':      _directUrlCtrl.text,
       };
 
   // setState + refresh overlay
@@ -779,42 +781,52 @@ class _IICardState extends State<IICard> {
     _minSubs.dispose();
     _maxSubs.dispose();
     _seedUrlCtrl.dispose();
+    _directUrlCtrl.dispose();
     super.dispose();
   }
 
   // ── Collapsed body (inline) ──────────────────────────────────────────
 
   Widget _buildCollapsedBody() {
+    final isDirect = _directUrlCtrl.text.trim().isNotEmpty;
     return Column(
       children: [
         _FieldRow(
-          label: 'Phase',
-          field: _dropdownField<String>(
-            value: _phase,
-            items: ['all', '1', '2', '3']
-                .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                .toList(),
-            onChanged: (v) {
-              _update(() => _phase = v ?? 'all');
-              _notify();
-            },
+          label: 'Direct URLs',
+          field: _inputField(_directUrlCtrl,
+              hint: 'youtu.be/… one per line',
+              onChanged: () { _update(() {}); _notify(); }),
+        ),
+        if (!isDirect) ...[
+          _FieldRow(
+            label: 'Phase',
+            field: _dropdownField<String>(
+              value: _phase,
+              items: ['all', '1', '2', '3']
+                  .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                  .toList(),
+              onChanged: (v) {
+                _update(() => _phase = v ?? 'all');
+                _notify();
+              },
+            ),
           ),
-        ),
-        _FieldRow(
-          label: 'Keywords',
-          field: _ChipInput(
-            chips:    _keywords,
-            onAdd:    (kw) { _update(() => _keywords.add(kw)); _notify(); },
-            onRemove: (i)  { _update(() => _keywords.removeAt(i)); _notify(); },
+          _FieldRow(
+            label: 'Keywords',
+            field: _ChipInput(
+              chips:    _keywords,
+              onAdd:    (kw) { _update(() => _keywords.add(kw)); _notify(); },
+              onRemove: (i)  { _update(() => _keywords.removeAt(i)); _notify(); },
+            ),
           ),
-        ),
-        _FieldRow(
-          label: 'Count',
-          field: _inputField(_count,
-              hint: '100',
-              keyboardType: TextInputType.number,
-              onChanged: _notify),
-        ),
+          _FieldRow(
+            label: 'Count',
+            field: _inputField(_count,
+                hint: '100',
+                keyboardType: TextInputType.number,
+                onChanged: _notify),
+          ),
+        ],
       ],
     );
   }

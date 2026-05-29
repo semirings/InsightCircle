@@ -159,6 +159,14 @@ class _AdminScreenState extends State<AdminScreen> {
   ) async {
     switch (step.id) {
       case 'II':
+        final directUrls = (params['directUrls'] ?? '')
+            .split('\n')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        final videoIds = directUrls.isNotEmpty
+            ? PubSubService.extractVideoIds(directUrls)
+            : null;
         final jobId = await PubSubService.triggerIngest(
           phase:           params['phase'] ?? 'all',
           keywords:        (params['keywords'] ?? '').isEmpty ? null : params['keywords'],
@@ -168,6 +176,7 @@ class _AdminScreenState extends State<AdminScreen> {
           minSubscribers:  int.tryParse(params['minSubscribers'] ?? ''),
           maxSubscribers:  int.tryParse(params['maxSubscribers'] ?? ''),
           skipDuplicates:  params['skipDuplicates'] != 'false',
+          videoIds:        videoIds,
         );
         setState(() => _activeJobId = jobId);
         await JobIdService.save(jobId);

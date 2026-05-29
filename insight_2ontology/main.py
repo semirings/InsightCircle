@@ -261,6 +261,41 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/pubsub/whisper-completion",
+          summary="Trigger narrative transform when Whisper finishes a video")
+async def pubsub_whisper_completion(request: Request) -> dict:
+    envelope = await request.json()
+    try:
+        data     = base64.b64decode(envelope["message"]["data"])
+        payload  = json.loads(data)
+        video_id = payload["video_id"]
+        status   = payload.get("status", "completed")
+    except Exception as exc:
+        log.error("PARSE ERROR: malformed whisper-completion message: %s", exc)
+        raise HTTPException(status_code=400, detail="Malformed message") from exc
+
+    if status != "completed":
+        log.info("Skipping whisper-completion status=%s video_id=%s", status, video_id)
+        return {"status": "skipped", "video_id": video_id}
+
+    log.info("REQUEST: whisper-completion video_id=%s", video_id)
+    t0 = time.monotonic()
+    try:
+        result = _process_narrative(video_id)
+    except Exception as exc:
+        log.error("FAILED: whisper-completion video_id=%s error=%s", video_id, exc, exc_info=True)
+        _publish_ontology_completion(video_id, "failed", 0, 0, "")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    log.info("DONE: whisper-completion video_id=%s elapsed=%.1fs",
+             video_id, time.monotonic() - t0)
+    _publish_ontology_completion(video_id, "completed",
+                                  result["node_count"], result["rel_count"],
+                                  result["output_path"])
+    return {"status": "ok", "video_id": video_id,
+            "node_count": result["node_count"], "rel_count": result["rel_count"]}
+
+
 @app.post("/transform", summary="Direct: transform narrative for a video_id")
 def transform(video_id: str) -> dict:
     log.info("REQUEST: /transform video_id=%s", video_id)

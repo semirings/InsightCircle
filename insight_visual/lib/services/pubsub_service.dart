@@ -22,6 +22,29 @@ class PubSubService {
 
   // ── Per-service message builders ─────────────────────────────────────────
 
+  static String? _extractVideoId(String raw) {
+    raw = raw.trim();
+    if (raw.isEmpty) return null;
+    if (RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(raw)) return raw;
+    try {
+      final uri = Uri.parse(raw);
+      if (uri.host == 'youtu.be' || uri.host == 'www.youtu.be') {
+        final id = uri.pathSegments.firstOrNull ?? '';
+        if (RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(id)) return id;
+      }
+      if (uri.host.contains('youtube.com')) {
+        final v = uri.queryParameters['v'] ?? '';
+        if (RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(v)) return v;
+        final m = RegExp(r'/(?:shorts|embed|v)/([A-Za-z0-9_-]{11})').firstMatch(uri.path);
+        if (m != null) return m.group(1);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static List<String> extractVideoIds(List<String> urls) =>
+      urls.map(_extractVideoId).whereType<String>().toList();
+
   static String _newId() {
     final r = Random.secure();
     return '${DateTime.now().millisecondsSinceEpoch}-'
@@ -38,6 +61,7 @@ class PubSubService {
     int? minSubscribers,
     int? maxSubscribers,
     bool skipDuplicates = true,
+    List<String>? videoIds,
   }) async {
     final id = jobId ?? _newId();
     final kws = (keywords != null && keywords.isNotEmpty && keywords != '[]')
@@ -46,7 +70,10 @@ class PubSubService {
     final payload = <String, dynamic>{
       'job_id': id,
       'phase': phase,
-      if (kws != null && kws.isNotEmpty) 'keywords': kws,
+      if (videoIds != null && videoIds.isNotEmpty)
+        'video_ids': videoIds
+      else if (kws != null && kws.isNotEmpty)
+        'keywords': kws,
       'max_total': ?count,
       'min_views': ?minViews,
       'max_views': ?maxViews,

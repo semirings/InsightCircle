@@ -425,24 +425,33 @@ def _fetch_video_transcript(video_id: str) -> list[dict]:
     from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled  # noqa: PLC0415
 
     try:
-        segments = YouTubeTranscriptApi.get_transcript(video_id, languages=_TRANSCRIPT_LANGS)
-        return [{"video_id": video_id, **seg} for seg in segments]
-    except TranscriptsDisabled:
-        return []
-    except NoTranscriptFound:
+        api = YouTubeTranscriptApi()
+        tl  = api.list(video_id)
+        try:
+            t = tl.find_transcript(_TRANSCRIPT_LANGS)
+        except NoTranscriptFound:
+            t = tl.find_generated_transcript(_TRANSCRIPT_LANGS)
+        segs = t.fetch()
+        return [{"video_id": video_id, "text": s.text,
+                 "start": s.start, "duration": s.duration} for s in segs]
+    except (TranscriptsDisabled, NoTranscriptFound):
         return []
     except Exception as exc:
         log.warning("transcript fetch failed", video_id=video_id, error=str(exc))
         return []
 
 
-def _phase2_transcripts(job_id: str, video_ids: list[str]) -> int:
-    """Fetch transcripts for all video_ids and write transcripts.jsonl to GCS. Returns segment count."""
+def _phase2_transcripts(job_id: str, video_ids: list[str]) -> tuple[int, list[str]]:
+    """Fetch transcripts; write transcripts.jsonl. Returns (segment_count, ids_without_transcript)."""
     log.info("Phase 2 transcripts start", job_id=job_id, video_count=len(video_ids))
     all_segments: list[dict] = []
+    has_transcript: set[str] = set()
 
     for i, vid in enumerate(video_ids):
-        all_segments.extend(_fetch_video_transcript(vid))
+        segs = _fetch_video_transcript(vid)
+        if segs:
+            has_transcript.add(vid)
+            all_segments.extend(segs)
         if (i + 1) % 50 == 0:
             log.info("Phase 2 transcripts progress",
                      job_id=job_id, processed=i + 1, total=len(video_ids),
@@ -451,9 +460,29 @@ def _phase2_transcripts(job_id: str, video_ids: list[str]) -> int:
     ndjson = "\n".join(json.dumps(s, ensure_ascii=False) for s in all_segments)
     _gcs_write(f"{_JOBS_PREFIX}/{job_id}/transcripts.jsonl", ndjson,
                content_type="application/x-ndjson")
+
+    without = [v for v in video_ids if v not in has_transcript]
     log.info("Phase 2 transcripts complete",
-             job_id=job_id, segment_count=len(all_segments))
-    return len(all_segments)
+             job_id=job_id, segment_count=len(all_segments),
+             with_transcript=len(has_transcript), without_transcript=len(without))
+    return len(all_segments), without
+
+
+def _trigger_whisper_batch(job_id: str, video_ids: list[str]) -> None:
+    """Fire-and-forget: publish one whisper-input message per video_id without blocking."""
+    if not video_ids:
+        return
+    project = os.environ.get("GCP_PROJECT", "creator-d4m-2026-1774038056")
+    topic   = f"projects/{project}/topics/whisper-input"
+    pub     = _get_publisher()
+    sent = 0
+    for vid in video_ids:
+        try:
+            pub.publish(topic, json.dumps({"video_id": vid}).encode("utf-8"))
+            sent += 1
+        except Exception as exc:
+            log.warning("whisper-input publish failed", video_id=vid, error=str(exc))
+    log.info("_trigger_whisper_batch fired", job_id=job_id, sent=sent)
 
 
 # ── Phase 2 — Metadata enrichment ────────────────────────────────────────────
@@ -504,7 +533,7 @@ def _build_record(video_id: str, fallback_title: str, item: dict) -> dict:
 
 
 def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
-            quota: Optional[dict] = None) -> dict[str, dict]:
+            quota: Optional[dict] = None) -> tuple[dict[str, dict], list[str]]:
     if raw is None:
         blob_name = f"{_JOBS_PREFIX}/{job_id}/ids.json"
         log.info("Phase 2 loading IDs from GCS", job_id=job_id, blob=blob_name)
@@ -556,9 +585,9 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
     log.info("Phase 2 metadata complete", job_id=job_id, record_count=len(seen))
 
     _phase2_comments(job_id, youtube, list(seen.keys()), quota=quota)
-    _phase2_transcripts(job_id, list(seen.keys()))
+    _, without_transcript = _phase2_transcripts(job_id, list(seen.keys()))
     log.info("Phase 2 complete", job_id=job_id, record_count=len(seen))
-    return seen
+    return seen, without_transcript
 
 
 def _save_partial(job_id: str, seen: dict[str, dict]) -> None:
@@ -719,17 +748,23 @@ async def pubsub_ingest(request: Request) -> dict:
     max_total         = int(payload.get("max_total", _MAX_TOTAL_VIDEOS))
     min_views: Optional[int] = int(payload["min_views"]) if payload.get("min_views") is not None else None
     max_views: Optional[int] = int(payload["max_views"]) if payload.get("max_views") is not None else None
+    direct_ids: list[str]   = payload.get("video_ids") or []
 
     log.info("Ingest job received", job_id=job_id, phase=phase,
              keyword_count=len(keywords), max_results_per_q=max_results_per_q,
-             max_total=max_total)
+             max_total=max_total, direct=len(direct_ids))
 
-    raw:          Optional[dict[str, str]]         = None
-    phase3_uris:  Optional[dict[str, Optional[str]]] = None
+    raw:              Optional[dict[str, str]]           = None
+    phase3_uris:      Optional[dict[str, Optional[str]]] = None
+    without_transcript: list[str]                        = []
     quota: dict = {}
 
     try:
-        if phase in ("1", "all"):
+        if direct_ids:
+            # Direct mode — bypass Phase 1 keyword search entirely.
+            raw = {vid: "" for vid in direct_ids}
+            log.info("Direct ingest mode", job_id=job_id, video_count=len(raw))
+        elif phase in ("1", "all"):
             raw = _phase1(job_id, keywords, max_results_per_q, max_total, quota=quota)
             known = _query_known_ids(list(raw.keys()))
             if known:
@@ -739,7 +774,7 @@ async def pubsub_ingest(request: Request) -> dict:
                 log.info("Filtered result", job_id=job_id, after=len(raw))
 
         if phase in ("2", "all"):
-            raw = _phase2(job_id, raw, quota=quota)
+            raw, without_transcript = _phase2(job_id, raw, quota=quota)
             if isinstance(raw, dict) and (min_views is not None or max_views is not None):
                 before = len(raw)
                 raw = {
@@ -764,6 +799,11 @@ async def pubsub_ingest(request: Request) -> dict:
             phase3_uris = _phase3(job_id)
             if phase3_uris:
                 _publish_ingest_completion(job_id, phase3_uris)
+
+        # Trigger Whisper after Phase 3 — fire-and-forget, never blocks the pipeline.
+        if without_transcript:
+            _trigger_whisper_batch(job_id, without_transcript)
+
     except _QuotaExceeded as exc:
         log.warning("YouTube quota exhausted — acking message to stop retries",
                     job_id=job_id, error=str(exc))
