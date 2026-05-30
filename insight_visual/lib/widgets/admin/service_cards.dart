@@ -7,9 +7,8 @@ import '../../models/execution_status.dart';
 import '../../models/step_result.dart';
 import '../../theme.dart';
 
-typedef RunCallback            = void Function(Map<String, String> params);
-typedef ParamsChangedCallback  = void Function(Map<String, String> params);
-typedef FetchKeywordsCallback  = Future<List<String>> Function(List<String> urls);
+typedef RunCallback           = void Function(Map<String, String> params);
+typedef ParamsChangedCallback = void Function(Map<String, String> params);
 
 // ── Per-card status indicator (elapsed timer + result badge) ──────────
 
@@ -667,14 +666,12 @@ class IICard extends StatefulWidget {
   final bool running;
   final RunCallback onRun;
   final ParamsChangedCallback? onParamsChanged;
-  final FetchKeywordsCallback? onFetchKeywords;
   final StepResult? lastResult;
 
   const IICard({
     super.key,
     required this.onRun,
     this.onParamsChanged,
-    this.onFetchKeywords,
     this.running = false,
     this.lastResult,
   });
@@ -691,10 +688,8 @@ class _IICardState extends State<IICard> {
   final _maxViews    = TextEditingController();
   final _minSubs     = TextEditingController();
   final _maxSubs     = TextEditingController();
-  final _seedUrlCtrl   = TextEditingController();
   final _directUrlCtrl = TextEditingController();
   bool  _skipDuplicates   = true;
-  bool  _fetchingKeywords = false;
 
   bool           _floating = false;
   OverlayEntry?  _overlay;
@@ -746,32 +741,6 @@ class _IICardState extends State<IICard> {
     if (mounted) setState(() => _floating = false);
   }
 
-  Future<void> _fetchSeedKeywords() async {
-    final fn = widget.onFetchKeywords;
-    if (fn == null) return;
-    final urls = _seedUrlCtrl.text
-        .split('\n')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-    if (urls.isEmpty) return;
-    _update(() => _fetchingKeywords = true);
-    try {
-      final keywords = await fn(urls);
-      _update(() {
-        for (final kw in keywords) {
-          if (!_keywords.contains(kw)) _keywords.add(kw);
-        }
-        _seedUrlCtrl.clear();
-      });
-      _notify();
-    } catch (_) {
-      // ignore
-    } finally {
-      if (mounted) _update(() => _fetchingKeywords = false);
-    }
-  }
-
   @override
   void dispose() {
     _overlay?.remove();
@@ -780,7 +749,6 @@ class _IICardState extends State<IICard> {
     _maxViews.dispose();
     _minSubs.dispose();
     _maxSubs.dispose();
-    _seedUrlCtrl.dispose();
     _directUrlCtrl.dispose();
     super.dispose();
   }
@@ -792,7 +760,7 @@ class _IICardState extends State<IICard> {
     return Column(
       children: [
         _FieldRow(
-          label: 'Direct URLs',
+          label: 'URLs',
           field: _inputField(_directUrlCtrl,
               hint: 'youtu.be/… one per line',
               onChanged: () { _update(() {}); _notify(); }),
@@ -834,126 +802,67 @@ class _IICardState extends State<IICard> {
   // ── Expanded body (floating panel) ──────────────────────────────────
 
   Widget _buildExpandedBody() {
+    final isDirect = _directUrlCtrl.text.trim().isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _FieldRow(
-          label: 'Phase',
-          field: _dropdownField<String>(
-            value: _phase,
-            items: ['all', '1', '2', '3']
-                .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                .toList(),
-            onChanged: (v) {
-              _update(() => _phase = v ?? 'all');
-              _notify();
-            },
+          label: 'URLs',
+          field: _inputField(_directUrlCtrl,
+              hint: 'youtu.be/… one per line — bypasses search',
+              onChanged: () { _update(() {}); _notify(); }),
+        ),
+        if (!isDirect) ...[
+          _FieldRow(
+            label: 'Phase',
+            field: _dropdownField<String>(
+              value: _phase,
+              items: ['all', '1', '2', '3']
+                  .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+                  .toList(),
+              onChanged: (v) {
+                _update(() => _phase = v ?? 'all');
+                _notify();
+              },
+            ),
           ),
-        ),
-        _FieldRow(
-          label: 'Keywords',
-          field: _ChipInput(
-            chips:    _keywords,
-            onAdd:    (kw) { _update(() => _keywords.add(kw)); _notify(); },
-            onRemove: (i)  { _update(() => _keywords.removeAt(i)); _notify(); },
+          _FieldRow(
+            label: 'Keywords',
+            field: _ChipInput(
+              chips:    _keywords,
+              onAdd:    (kw) { _update(() => _keywords.add(kw)); _notify(); },
+              onRemove: (i)  { _update(() => _keywords.removeAt(i)); _notify(); },
+            ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 5),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('SEED URLS',
-                  style: inter(fontSize: 11, fontWeight: FontWeight.w700,
-                      color: kAdminTextDim, letterSpacing: 0.5)),
-              const SizedBox(height: 3),
-              Container(
-                height: 54,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                decoration: BoxDecoration(
-                  color: kAdminSurfaceLow,
-                  border: Border.all(color: kAdminBorder),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: TextField(
-                  controller: _seedUrlCtrl,
-                  maxLines: null,
-                  style: inter(fontSize: 9, color: kAdminText),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: 'paste YouTube URLs, one per line…',
-                    hintStyle: inter(fontSize: 9, color: kAdminTextDim),
-                    isDense: true,
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 3),
-              MouseRegion(
-                cursor: (_fetchingKeywords || widget.onFetchKeywords == null)
-                    ? SystemMouseCursors.basic
-                    : SystemMouseCursors.click,
-                child: GestureDetector(
-                  onTap: (_fetchingKeywords || widget.onFetchKeywords == null)
-                      ? null
-                      : _fetchSeedKeywords,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: kAdminSurfaceLow,
-                      border: Border.all(color: kAdminBorder),
-                      borderRadius: BorderRadius.circular(3),
-                    ),
-                    child: _fetchingKeywords
-                        ? const SizedBox(
-                            width: 10, height: 10,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 1.5, color: kAdminAccent),
-                          )
-                        : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.label_outline,
-                                  size: 10, color: kAdminTextDim),
-                              const SizedBox(width: 4),
-                              Text('Fetch Keywords',
-                                  style: inter(fontSize: 9, color: kAdminTextMuted)),
-                            ],
-                          ),
-                  ),
-                ),
-              ),
-            ],
+          _FieldRow(
+            label: 'Count',
+            field: _inputField(_count,
+                hint: '100',
+                keyboardType: TextInputType.number,
+                onChanged: _notify),
           ),
-        ),
-        _FieldRow(
-          label: 'Count',
-          field: _inputField(_count,
-              hint: '100',
-              keyboardType: TextInputType.number,
-              onChanged: _notify),
-        ),
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 6),
-          child: Divider(color: kAdminBorder, height: 1),
-        ),
-        _RangeRow(
-          label: 'Views',
-          minCtrl: _minViews,
-          maxCtrl: _maxViews,
-          onChanged: _notify,
-        ),
-        _RangeRow(
-          label: 'Subs',
-          minCtrl: _minSubs,
-          maxCtrl: _maxSubs,
-          onChanged: _notify,
-        ),
-        _ToggleRow(
-          label: 'Skip dups',
-          value: _skipDuplicates,
-          onChanged: (v) { _update(() => _skipDuplicates = v); _notify(); },
-        ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Divider(color: kAdminBorder, height: 1),
+          ),
+          _RangeRow(
+            label: 'Views',
+            minCtrl: _minViews,
+            maxCtrl: _maxViews,
+            onChanged: _notify,
+          ),
+          _RangeRow(
+            label: 'Subs',
+            minCtrl: _minSubs,
+            maxCtrl: _maxSubs,
+            onChanged: _notify,
+          ),
+          _ToggleRow(
+            label: 'Skip dups',
+            value: _skipDuplicates,
+            onChanged: (v) { _update(() => _skipDuplicates = v); _notify(); },
+          ),
+        ],
       ],
     );
   }

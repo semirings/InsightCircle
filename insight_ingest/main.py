@@ -348,11 +348,19 @@ def _phase1(job_id: str, keywords: list[str],
 
 # ── Comments helpers ──────────────────────────────────────────────────────────
 
+_COMMENT_FETCH_MAX_RETRIES = 3
+
+
 def _fetch_video_comments(youtube, video_id: str,
                           quota: Optional[dict] = None) -> list[dict]:
-    """Return up to _COMMENTS_PER_VIDEO top-level comments for a single video."""
+    """Return up to _COMMENTS_PER_VIDEO top-level comments for a single video.
+
+    Transient errors retry with exponential backoff up to _COMMENT_FETCH_MAX_RETRIES,
+    then give up on this video and return what was collected so far.
+    """
     results: list[dict] = []
     page_token: Optional[str] = None
+    retries = 0  # consecutive failures on the current page
 
     while len(results) < _COMMENTS_PER_VIDEO:
         remaining = _COMMENTS_PER_VIDEO - len(results)
@@ -368,12 +376,24 @@ def _fetch_video_comments(youtube, video_id: str,
             resp = youtube.commentThreads().list(**kwargs).execute()
             if quota is not None:
                 quota["comment_calls"] = quota.get("comment_calls", 0) + 1
+            retries = 0  # reset on success — next page starts fresh
         except HttpError as exc:
             if exc.resp.status == 403 and "commentsDisabled" in str(exc):
                 break  # silently skip videos with comments disabled
-            log.warning("commentThreads.list failed",
-                        video_id=video_id, error=str(exc))
-            break
+            if exc.resp.status == 403 and "quotaExceeded" in str(exc):
+                # Bail out hard — no retry can succeed when quota is exhausted.
+                raise _QuotaExceeded("YouTube Data API quota exhausted during comments fetch") from exc
+            retries += 1
+            if retries >= _COMMENT_FETCH_MAX_RETRIES:
+                log.warning("commentThreads.list giving up",
+                            video_id=video_id, retries=retries, error=str(exc))
+                break
+            backoff = 2 ** retries  # 2s, 4s
+            log.warning("commentThreads.list failed — retrying",
+                        video_id=video_id, attempt=retries,
+                        backoff_s=backoff, error=str(exc))
+            time.sleep(backoff)
+            continue
 
         for item in (resp.get("items") or []):
             top = (item.get("snippet") or {}).get("topLevelComment") or {}
@@ -533,7 +553,9 @@ def _build_record(video_id: str, fallback_title: str, item: dict) -> dict:
 
 
 def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
-            quota: Optional[dict] = None) -> tuple[dict[str, dict], list[str]]:
+            quota: Optional[dict] = None,
+            min_views: Optional[int] = None,
+            max_views: Optional[int] = None) -> tuple[dict[str, dict], list[str]]:
     if raw is None:
         blob_name = f"{_JOBS_PREFIX}/{job_id}/ids.json"
         log.info("Phase 2 loading IDs from GCS", job_id=job_id, blob=blob_name)
@@ -562,6 +584,11 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
                 .execute()
             )
         except HttpError as exc:
+            if exc.resp.status == 403 and "quotaExceeded" in str(exc):
+                log.warning("YouTube quota exceeded in Phase 2 — saving partial results",
+                            job_id=job_id, batch=batch_num)
+                _save_partial(job_id, seen)
+                raise _QuotaExceeded("YouTube Data API daily quota exhausted") from exc
             log.error("Phase 2 API batch failed — saving partial results",
                       job_id=job_id, batch=batch_num, error=str(exc))
             _save_partial(job_id, seen)
@@ -578,6 +605,20 @@ def _phase2(job_id: str, raw: Optional[dict[str, str]] = None,
             vid = item.get("id")
             if vid:
                 seen[vid] = _build_record(vid, raw.get(vid, ""), item)
+
+    # Apply view filter BEFORE fetching comments/transcripts so we don't burn
+    # YouTube/Whisper budget on videos that get discarded. Also guarantees that
+    # output/comments/transcripts files stay consistent (same set of videos).
+    if min_views is not None or max_views is not None:
+        before = len(seen)
+        seen = {
+            vid: rec for vid, rec in seen.items()
+            if (min_views is None or rec.get("views", 0) >= min_views)
+            and (max_views is None or rec.get("views", 0) <= max_views)
+        }
+        log.info("View filter applied",
+                 job_id=job_id, min_views=min_views, max_views=max_views,
+                 before=before, after=len(seen))
 
     ndjson = "\n".join(json.dumps(r, ensure_ascii=False) for r in seen.values())
     _gcs_write(f"{_JOBS_PREFIX}/{job_id}/output.jsonl", ndjson,
@@ -774,21 +815,10 @@ async def pubsub_ingest(request: Request) -> dict:
                 log.info("Filtered result", job_id=job_id, after=len(raw))
 
         if phase in ("2", "all"):
-            raw, without_transcript = _phase2(job_id, raw, quota=quota)
-            if isinstance(raw, dict) and (min_views is not None or max_views is not None):
-                before = len(raw)
-                raw = {
-                    vid: rec for vid, rec in raw.items()
-                    if (min_views is None or rec.get("views", 0) >= min_views)
-                    and (max_views is None or rec.get("views", 0) <= max_views)
-                }
-                log.info("View filter applied", job_id=job_id,
-                         min_views=min_views, max_views=max_views,
-                         before=before, after=len(raw))
-                if raw:
-                    ndjson = "\n".join(json.dumps(r, ensure_ascii=False) for r in raw.values())
-                    _gcs_write(f"ingest-jobs/{job_id}/output.jsonl", ndjson,
-                               content_type="application/x-ndjson")
+            raw, without_transcript = _phase2(
+                job_id, raw, quota=quota,
+                min_views=min_views, max_views=max_views,
+            )
 
         if isinstance(raw, dict):
             quota["videos_written"] = len(raw)
@@ -809,12 +839,14 @@ async def pubsub_ingest(request: Request) -> dict:
                     job_id=job_id, error=str(exc))
         return {"status": "quota_exceeded", "job_id": job_id,
                 "detail": "Re-run after quota resets (~08:00 UTC)"}
+    finally:
+        # Always log quota usage — even on _QuotaExceeded early return
+        # or unhandled exceptions propagating to the global handler.
+        _write_quota_log(job_id, quota)
 
     gcs_uri         = (phase3_uris or {}).get("gcs_uri")
     comments_uri    = (phase3_uris or {}).get("comments_uri")
     transcripts_uri = (phase3_uris or {}).get("transcripts_uri")
-
-    _write_quota_log(job_id, quota)
 
     log.info("Ingest job complete", job_id=job_id, phase=phase,
              gcs_uri=gcs_uri, comments_uri=comments_uri, transcripts_uri=transcripts_uri)

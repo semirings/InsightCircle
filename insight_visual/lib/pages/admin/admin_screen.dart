@@ -377,23 +377,6 @@ class _AdminScreenState extends State<AdminScreen> {
     } catch (_) {}
   }
 
-  Future<List<String>> _fetchSeedKeywords(List<String> urls) async {
-    final cr = _cloudRun;
-    if (cr == null) return [];
-    try {
-      final result = await cr.callServiceEndpoint(
-        kGcpProject, kRegion, kIngestService,
-        '/seed/keywords',
-        {'urls': urls},
-      );
-      final kws = result['keywords'];
-      if (kws is List) return kws.cast<String>();
-    } catch (e) {
-      // surface nothing — chip list stays unchanged
-    }
-    return [];
-  }
-
   Future<void> _fetchLogs(String executionId) async {
     if (_logging == null) return;
     setState(() => _logsLoading = true);
@@ -446,7 +429,6 @@ class _AdminScreenState extends State<AdminScreen> {
                     onRun: _runSingleWithParams,
                     onParamsChanged: _updateStepParams,
                     onSelectRun: _selectRun,
-                    onFetchKeywords: _fetchSeedKeywords,
                   ),
                 ),
                 // Column 3 — detail panel (fills remaining space)
@@ -638,7 +620,6 @@ class _ServiceCardColumn extends StatelessWidget {
   final void Function(PipelineStep, Map<String, String>) onRun;
   final void Function(String, Map<String, String>) onParamsChanged;
   final void Function(StepResult) onSelectRun;
-  final Future<List<String>> Function(List<String> urls)? onFetchKeywords;
 
   const _ServiceCardColumn({
     required this.steps,
@@ -654,7 +635,6 @@ class _ServiceCardColumn extends StatelessWidget {
     this.itVideoIds        = const [],
     this.itVideoIdsLoading = false,
     this.selectedRun,
-    this.onFetchKeywords,
   });
 
   Widget _cardForStep(PipelineStep step) {
@@ -667,7 +647,6 @@ class _ServiceCardColumn extends StatelessWidget {
           running: running, lastResult: last,
           onRun: (p) => onRun(step, p),
           onParamsChanged: (p) => onParamsChanged(step.id, p),
-          onFetchKeywords: onFetchKeywords,
         );
       case 'I2':
         return I2Card(
